@@ -3,6 +3,29 @@
 venv/
 retail-agent/venv/
 
+# Environment & secrets
+.env
+*.env
+*.env.*
+.env.local
+.env.development
+.env.production
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+*.jks
+*.keystore
+*.p8
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+
 # Python cache
 __pycache__/
 .pytest_cache/
@@ -10,9 +33,10 @@ __pycache__/
 
 # Logs
 logs/
+dataverse_backend/logs/
 *.log
 
 # OS files
+.DS_Store
 Thumbs.db
 Desktop.ini
-
