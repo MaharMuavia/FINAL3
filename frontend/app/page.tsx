@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Menu, History, Database, FolderOpen, Settings, Bot, Table, Layers, 
-  Hash, List, Calendar, Activity, AlertTriangle, Network, Sparkles, 
+  Hash, List, Calendar, AlertTriangle, Sparkles, 
   Paperclip, ArrowRight, ArrowUp, BarChart2, Store, BrainCircuit, 
   Brain, CheckCircle2, TrendingUp, Plus, FileSpreadsheet, Eye, 
   ShoppingCart, CloudUpload, MessageSquare, FileText,
@@ -61,6 +61,38 @@ const formatCell = (value: unknown) => {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'number') return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value);
   return String(value);
+};
+
+const datasetTypeOf = (dataset: DatasetSummary | null) => dataset?.dataset_type || String(dataset?.dataset_profile?.dataset_type || 'generic');
+
+const datasetTypeLabel = (dataset: DatasetSummary | null) => {
+  const type = datasetTypeOf(dataset);
+  return type.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+};
+
+const datasetSuggestions = (dataset: DatasetSummary | null) => {
+  const type = datasetTypeOf(dataset);
+  const semantic = dataset?.dataset_profile?.semantic_columns ?? {};
+  if (type === 'business_leads') {
+    return [
+      semantic.country ? 'Which countries have the most businesses?' : null,
+      semantic.industry ? 'Which industries are most common?' : null,
+      'Which businesses look like the highest-value leads?',
+      semantic.employee_range ? 'Segment businesses by employee range.' : null,
+      semantic.revenue_range ? 'Segment businesses by yearly revenue range.' : null,
+      'Create an outreach strategy for these leads.',
+      semantic.website ? 'Which businesses have no website?' : null,
+    ].filter(Boolean) as string[];
+  }
+  if (type === 'sales') {
+    return [
+      semantic.product ? 'What are the top products?' : null,
+      semantic.product && semantic.date ? 'Which products are trending?' : null,
+      semantic.revenue && semantic.date ? 'Show revenue by month.' : null,
+      semantic.category ? 'Which category performs best?' : null,
+    ].filter(Boolean) as string[];
+  }
+  return ['Summarize this dataset.', 'Which columns have missing values?', 'Show unique values by column.', 'Find important patterns.'];
 };
 
 // --- Components ---
@@ -681,6 +713,9 @@ const HomeView = ({
                 <p className="text-xs text-[#cbc3d7] mt-1">
                   {uploadStatus || (dataset ? `${formatNumber(dataset.dataset_rows)} rows, ${formatNumber(dataset.dataset_cols)} columns connected to ${API_BASE_URL}` : `Backend target: ${API_BASE_URL}`)}
                 </p>
+                {dataset && (
+                  <p className="text-[11px] text-blue-300 mt-1">Detected type: {datasetTypeLabel(dataset)}</p>
+                )}
               </div>
             </div>
             {dataset && (
@@ -743,7 +778,7 @@ const ChatView = ({
                   <Table size={18} className="text-violet-400 shrink-0" />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white truncate">{dataset.dataset_filename}</p>
-                    <p className="text-xs text-[#cbc3d7]">{formatNumber(dataset.dataset_rows)} rows, {formatNumber(dataset.dataset_cols)} columns</p>
+                    <p className="text-xs text-[#cbc3d7]">{formatNumber(dataset.dataset_rows)} rows, {formatNumber(dataset.dataset_cols)} columns â€¢ {datasetTypeLabel(dataset)}</p>
                   </div>
                 </div>
                 <span className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded">Connected</span>
@@ -872,10 +907,12 @@ const DataHubView = ({
   dataset,
   messages,
   onUpload,
+  onSubmit,
 }: {
   dataset: DatasetSummary | null;
   messages: ChatMessage[];
   onUpload: (file: File) => void;
+  onSubmit: (query: string) => void;
 }) => {
   const assistantMessages = messages.filter((message) => message.role === 'assistant');
   const latestAssistant = assistantMessages.at(-1);
@@ -888,6 +925,7 @@ const DataHubView = ({
   const previewRows = dataset?.dataset_preview ?? [];
   const previewColumns = previewRows.length ? Object.keys(previewRows[0]).slice(0, 6) : [];
   const semanticColumns = Object.entries(profile?.semantic_columns ?? {}).filter(([, column]) => Boolean(column));
+  const suggestedQuestions = datasetSuggestions(dataset);
 
   return (
     <div className="flex-1 w-full mx-auto px-4 md:px-8 pb-32 pt-24 overflow-y-auto overflow-x-hidden">
@@ -938,7 +976,7 @@ const DataHubView = ({
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-white">{dataset?.dataset_filename || 'Waiting for dataset'}</h2>
-                  <p className="text-xs text-[#cbc3d7] mt-1">{dataset ? `${dataset.message} • Ready for analysis` : 'Upload from the chat bar or dashboard prompt'}</p>
+                  <p className="text-xs text-[#cbc3d7] mt-1">{dataset ? `${dataset.message} | ${datasetTypeLabel(dataset)} | Ready for analysis` : 'Upload from the chat bar or dashboard prompt'}</p>
                 </div>
               </div>
 
@@ -959,6 +997,11 @@ const DataHubView = ({
                     <CheckCircle2 size={16} />
                     <p className="text-lg font-medium text-white">{formatFileSize(dataset?.originalFileSize)}</p>
                   </div>
+                </div>
+                <div className="w-px h-8 bg-[#494454]/50"></div>
+                <div>
+                  <p className="text-[10px] text-[#cbc3d7] mb-1 uppercase tracking-wider font-semibold">Dataset Type</p>
+                  <p className="text-lg font-medium text-white">{dataset ? datasetTypeLabel(dataset) : 'Generic'}</p>
                 </div>
               </div>
             </div>
@@ -1062,7 +1105,7 @@ const DataHubView = ({
                   </div>
                   <span className="px-3 py-1 bg-[#222a3d] border border-[#494454] rounded text-xs text-blue-400 flex items-center gap-2 font-medium">
                       <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
-                      {dataset?.is_retail ? 'Retail' : 'Generic'}
+                      {dataset ? datasetTypeLabel(dataset) : 'Generic'}
                   </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1123,52 +1166,32 @@ const DataHubView = ({
            </div>
         </div>
 
-        {/* Proactive Insights Section */}
+        {/* Relevant Follow-up Questions */}
         <section className="mt-8 pt-4">
           <div className="flex items-center gap-3 mb-6 px-1">
             <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse"></div>
             <h3 className="text-lg font-semibold text-white flex items-center gap-3">
-              Proactive Insights
-              <span className="text-[10px] bg-[#222a3d] text-violet-300 px-2 py-0.5 rounded border border-violet-500/20 uppercase tracking-wider font-bold">Generated</span>
+              Relevant Follow-ups
+              <span className="text-[10px] bg-[#222a3d] text-violet-300 px-2 py-0.5 rounded border border-violet-500/20 uppercase tracking-wider font-bold">{dataset ? datasetTypeLabel(dataset) : 'Generic'}</span>
             </h3>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            <GlassCard className="p-5 flex flex-col relative overflow-hidden group">
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-blue-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-400 border border-blue-500/20">
-                  <Activity size={16} />
-                </div>
-                <span className="text-[10px] uppercase tracking-wider font-semibold text-[#cbc3d7]">Correlation</span>
-              </div>
-              <h4 className="text-base text-white font-medium mb-2 leading-tight">High Correlation Detected</h4>
-              <p className="text-sm text-[#cbc3d7] flex-1 leading-relaxed">Strong inverse relationship between <code className="text-blue-300 bg-blue-300/10 px-1 py-0.5 rounded text-[11px]">Support_Tickets</code> and <code className="text-blue-300 bg-blue-300/10 px-1 py-0.5 rounded text-[11px]">Retention_Rate</code> (-0.84).</p>
-            </GlassCard>
-
-            <GlassCard className="p-5 flex flex-col relative overflow-hidden group border-amber-500/20 shadow-[0_0_20px_rgba(245,158,11,0.05)]">
-               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-amber-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-500 border border-amber-500/20">
-                  <AlertTriangle size={16} />
-                </div>
-                <span className="text-[10px] uppercase tracking-wider font-semibold text-[#cbc3d7]">Anomaly</span>
-              </div>
-              <h4 className="text-base text-white font-medium mb-2 leading-tight">Usage Drop in Segment C</h4>
-              <p className="text-sm text-[#cbc3d7] flex-1 leading-relaxed">Enterprise users in APAC region show a sudden 22% drop in daily active sessions over the last 7 days.</p>
-            </GlassCard>
-
-            <GlassCard className="p-5 flex flex-col relative overflow-hidden group">
-               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-violet-400 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-8 h-8 rounded-lg bg-violet-500/10 flex items-center justify-center text-violet-400 border border-violet-500/20">
-                  <Network size={16} />
-                </div>
-                <span className="text-[10px] uppercase tracking-wider font-semibold text-[#cbc3d7]">Clustering</span>
-              </div>
-              <h4 className="text-base text-white font-medium mb-2 leading-tight">New Cohort Identified</h4>
-              <p className="text-sm text-[#cbc3d7] flex-1 leading-relaxed">Auto-clustering found a high-value subgroup: &quot;Weekend Power&quot; contributing to 15% of total eng.</p>
-            </GlassCard>
+            {suggestedQuestions.map((question, index) => {
+              const Icon = index % 3 === 0 ? Target : index % 3 === 1 ? BarChart2 : MessageSquare;
+              return (
+                <button key={question} type="button" onClick={() => onSubmit(question)} className="text-left">
+                  <GlassCard className="p-5 flex flex-col relative overflow-hidden group h-full">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-400 border border-blue-500/20 shrink-0">
+                        <Icon size={16} />
+                      </div>
+                      <p className="text-sm text-white leading-relaxed">{question}</p>
+                    </div>
+                  </GlassCard>
+                </button>
+              );
+            })}
           </div>
         </section>
       </div>
@@ -1198,7 +1221,7 @@ export default function App() {
         {
           id: crypto.randomUUID(),
           role: 'system',
-          content: `${uploaded.dataset_filename || file.name} is ready: ${formatNumber(uploaded.dataset_rows)} rows and ${formatNumber(uploaded.dataset_cols)} columns.`,
+          content: `${uploaded.dataset_filename || file.name} is ready: ${formatNumber(uploaded.dataset_rows)} rows, ${formatNumber(uploaded.dataset_cols)} columns, ${datasetTypeLabel(nextDataset)} dataset type.`,
         },
       ]);
       setCurrentView('home');
@@ -1430,7 +1453,7 @@ export default function App() {
           >
             {currentView === 'home' && <HomeView dataset={dataset} uploadStatus={uploadStatus} onUpload={handleUpload} onSubmit={handleSubmit} />}
             {currentView === 'chat' && <ChatView dataset={dataset} messages={messages} isQuerying={isQuerying} onUpload={handleUpload} onSubmit={handleSubmit} />}
-            {currentView === 'data' && <DataHubView dataset={dataset} messages={messages} onUpload={handleUpload} />}
+            {currentView === 'data' && <DataHubView dataset={dataset} messages={messages} onUpload={handleUpload} onSubmit={handleSubmit} />}
           </motion.div>
         </AnimatePresence>
         

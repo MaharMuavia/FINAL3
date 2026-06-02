@@ -61,6 +61,8 @@ class UploadResponse(BaseModel):
     column_dtypes: Optional[List[str]] = None
     dataset_preview: Optional[List[Dict[str, Any]]] = None
     dataset_profile: Optional[Dict[str, Any]] = None
+    dataset_type: Optional[str] = None
+    column_roles: Optional[Dict[str, str]] = None
     created_at: Optional[str] = None
 
 

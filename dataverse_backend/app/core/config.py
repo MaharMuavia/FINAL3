@@ -4,139 +4,133 @@ Uses environment variables for all configurable parameters to ensure 12-factor p
 """
 from __future__ import annotations
 
-import os
-from typing import List, Optional
 from pathlib import Path
-# Support both pydantic v1 and v2 migration where BaseSettings moved to pydantic-settings
-try:
-    # pydantic v2
-    from pydantic_settings import BaseSettings
-    from pydantic import Field
-except Exception:
-    # pydantic v1
-    from pydantic import BaseSettings, Field
+from typing import List, Optional
 
-from pydantic import validator
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "DataVerse AI"
-    ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
-    APP_VERSION: str = Field(default="1.0.0", env="APP_VERSION")
-    ENABLE_OPENAPI_DOCS: bool = Field(default=True, env="ENABLE_OPENAPI_DOCS")
-    REQUEST_TIMEOUT_SECONDS: int = Field(default=60, env="REQUEST_TIMEOUT_SECONDS")
+    ENVIRONMENT: str = Field(default="development")
+    APP_VERSION: str = Field(default="1.0.0")
+    ENABLE_OPENAPI_DOCS: bool = Field(default=True)
+    REQUEST_TIMEOUT_SECONDS: int = Field(default=60)
 
     # Logging
-    LOG_DIR: str = Field(default="./logs", env="LOG_DIR")
-    LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
-    LOG_JSON: bool = Field(default=False, env="LOG_JSON")
+    LOG_DIR: str = Field(default="./logs")
+    LOG_LEVEL: str = Field(default="INFO")
+    LOG_JSON: bool = Field(default=False)
 
     # API and transport security
-    CORS_ORIGINS: str = Field(default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001", env="CORS_ORIGINS")
-    TRUSTED_HOSTS: str = Field(default="localhost,127.0.0.1,testserver", env="TRUSTED_HOSTS")
-    SECURE_HEADERS_ENABLED: bool = Field(default=True, env="SECURE_HEADERS_ENABLED")
-    HTTPS_REDIRECT: bool = Field(default=False, env="HTTPS_REDIRECT")
+    CORS_ORIGINS: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+    )
+    TRUSTED_HOSTS: str = Field(default="localhost,127.0.0.1,testserver")
+    SECURE_HEADERS_ENABLED: bool = Field(default=True)
+    HTTPS_REDIRECT: bool = Field(default=False)
 
     # API rate limiting
-    RATE_LIMIT_ENABLED: bool = Field(default=True, env="RATE_LIMIT_ENABLED")
-    RATE_LIMIT_REQUESTS: int = Field(default=120, env="RATE_LIMIT_REQUESTS")
-    RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, env="RATE_LIMIT_WINDOW_SECONDS")
-    RATE_LIMIT_PATH_PREFIX: str = Field(default="/api", env="RATE_LIMIT_PATH_PREFIX")
+    RATE_LIMIT_ENABLED: bool = Field(default=True)
+    RATE_LIMIT_REQUESTS: int = Field(default=120)
+    RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60)
+    RATE_LIMIT_PATH_PREFIX: str = Field(default="/api")
 
     # Intent parsing provider
     # Options: "auto" (default), "deepseek", "openai"
-    INTENT_LLM_PROVIDER: str = Field(default="auto", env="INTENT_LLM_PROVIDER")
-    INTENT_LLM_TIMEOUT: int = Field(default=20, env="INTENT_LLM_TIMEOUT")
+    INTENT_LLM_PROVIDER: str = Field(default="auto")
+    INTENT_LLM_TIMEOUT: int = Field(default=20)
 
     # OpenAI for intent parsing
-    OPENAI_API_KEY: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    OPENAI_API_BASE: Optional[str] = Field(default=None, env="OPENAI_API_BASE")
-    OPENAI_CHAT_MODEL: str = Field(default="gpt-4o", env="OPENAI_CHAT_MODEL")
-    OPENAI_INTENT_MODEL: str = Field(default="gpt-4o-mini", env="OPENAI_INTENT_MODEL")
+    OPENAI_API_KEY: Optional[str] = Field(default=None)
+    OPENAI_API_BASE: Optional[str] = Field(default=None)
+    OPENAI_CHAT_MODEL: str = Field(default="gpt-4o")
+    OPENAI_INTENT_MODEL: str = Field(default="gpt-4o-mini")
 
     # DeepSeek for intent parsing (OpenAI-compatible API)
-    DEEPSEEK_API_KEY: Optional[str] = Field(default=None, env="DEEPSEEK_API_KEY")
-    DEEPSEEK_API_BASE: str = Field(default="https://api.deepseek.com", env="DEEPSEEK_API_BASE")
-    DEEPSEEK_INTENT_MODEL: str = Field(default="deepseek-chat", env="DEEPSEEK_INTENT_MODEL")
+    DEEPSEEK_API_KEY: Optional[str] = Field(default=None)
+    DEEPSEEK_API_BASE: str = Field(default="https://api.deepseek.com")
+    DEEPSEEK_INTENT_MODEL: str = Field(default="deepseek-chat")
 
     # DeepAnalyze / Ollama settings
-    DEEPANALYZE_BASE_URL: str = Field(default="http://localhost:11434", env="DEEPANALYZE_BASE_URL")
+    DEEPANALYZE_BASE_URL: str = Field(default="http://localhost:11434")
     # Preferred logical role/model used for reasoning. This is the primary model name the system will
     # attempt to use, but the system treats this as a logical role and will fall back to other local
     # models if allowed by configuration. This prevents crashes when a specific model artifact is missing.
-    DEEPANALYZE_MODEL: str = Field(default="deepanalyze-8b", env="DEEPANALYZE_MODEL")
+    DEEPANALYZE_MODEL: str = Field(default="deepanalyze-8b")
     # A reasonable default fallback model installed locally via Ollama (phi3:mini is available offline)
-    DEEPANALYZE_FALLBACK_MODEL: str = Field(default="phi3:mini", env="DEEPANALYZE_FALLBACK_MODEL")
-    DEEPANALYZE_TIMEOUT: int = Field(default=20, env="DEEPANALYZE_TIMEOUT")
+    DEEPANALYZE_FALLBACK_MODEL: str = Field(default="phi3:mini")
+    DEEPANALYZE_TIMEOUT: int = Field(default=20)
     # Allow falling back to local models when the preferred model isn't available. Safe for dev.
-    DEEPANALYZE_ALLOW_FALLBACK: bool = Field(default=True, env="DEEPANALYZE_ALLOW_FALLBACK")
+    DEEPANALYZE_ALLOW_FALLBACK: bool = Field(default=True)
 
     # Mistral for budget-conscious task routing and lightweight chat
-    MISTRAL_API_KEY: Optional[str] = Field(default=None, env="MISTRAL_API_KEY")
-    MISTRAL_API_BASE: str = Field(default="https://api.mistral.ai/v1", env="MISTRAL_API_BASE")
-    MISTRAL_CHAT_MODEL: str = Field(default="mistral-small-latest", env="MISTRAL_CHAT_MODEL")
-    MISTRAL_REASONING_MODEL: str = Field(default="mistral-large-latest", env="MISTRAL_REASONING_MODEL")
+    MISTRAL_API_KEY: Optional[str] = Field(default=None)
+    MISTRAL_API_BASE: str = Field(default="https://api.mistral.ai/v1")
+    MISTRAL_CHAT_MODEL: str = Field(default="mistral-small-latest")
+    MISTRAL_REASONING_MODEL: str = Field(default="mistral-large-latest")
 
     # Security / Limits
-    MAX_UPLOAD_SIZE_MB: int = Field(default=50, env="MAX_UPLOAD_SIZE_MB")
-    
+    MAX_UPLOAD_SIZE_MB: int = Field(default=50)
+
     # Authentication
-    SECRET_KEY: str = Field(default="your-secret-key-change-in-production", env="SECRET_KEY")
-    ALGORITHM: str = Field(default="HS256", env="ALGORITHM")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, env="ACCESS_TOKEN_EXPIRE_MINUTES")
-    
+    SECRET_KEY: str = Field(default="your-secret-key-change-in-production")
+    ALGORITHM: str = Field(default="HS256")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30)
+
     # Database
     # Expect a full async SQLAlchemy-compatible DATABASE_URL, e.g.
     # postgresql+asyncpg://user:password@host:5432/dbname
-    DATABASE_URL: str | None = Field(default=None, env="DATABASE_URL")
-    DATABASE_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, env="DATABASE_CONNECT_TIMEOUT_SECONDS")
-    
+    DATABASE_URL: str | None = Field(default=None)
+    DATABASE_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0)
+
     # Redis
-    REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
-    REDIS_CONNECT_TIMEOUT_SECONDS: float = Field(default=1.0, env="REDIS_CONNECT_TIMEOUT_SECONDS")
-    
+    REDIS_URL: str = Field(default="redis://localhost:6379/0")
+    REDIS_CONNECT_TIMEOUT_SECONDS: float = Field(default=1.0)
+
     # Celery
-    CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/1", env="CELERY_BROKER_URL")
-    CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/2", env="CELERY_RESULT_BACKEND")
-    
+    CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/1")
+    CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/2")
+
     # File Storage
-    STORAGE_TYPE: str = Field(default="local", env="STORAGE_TYPE")  # local, minio, s3
-    
+    STORAGE_TYPE: str = Field(default="local")  # local, minio, s3
+
     # MinIO Configuration
-    MINIO_ENDPOINT: str = Field(default="localhost:9000", env="MINIO_ENDPOINT")
-    MINIO_ACCESS_KEY: str = Field(default="minioadmin", env="MINIO_ACCESS_KEY")
-    MINIO_SECRET_KEY: str = Field(default="minioadmin", env="MINIO_SECRET_KEY")
-    MINIO_BUCKET: str = Field(default="dataverse", env="MINIO_BUCKET")
-    MINIO_SECURE: bool = Field(default=False, env="MINIO_SECURE")
-    
+    MINIO_ENDPOINT: str = Field(default="localhost:9000")
+    MINIO_ACCESS_KEY: str = Field(default="minioadmin")
+    MINIO_SECRET_KEY: str = Field(default="minioadmin")
+    MINIO_BUCKET: str = Field(default="dataverse")
+    MINIO_SECURE: bool = Field(default=False)
+
     # AWS S3 Configuration
-    AWS_REGION: str = Field(default="us-east-1", env="AWS_REGION")
-    AWS_ACCESS_KEY_ID: Optional[str] = Field(default=None, env="AWS_ACCESS_KEY_ID")
-    AWS_SECRET_ACCESS_KEY: Optional[str] = Field(default=None, env="AWS_SECRET_ACCESS_KEY")
-    AWS_S3_BUCKET: str = Field(default="dataverse", env="AWS_S3_BUCKET")
-    
+    AWS_REGION: str = Field(default="us-east-1")
+    AWS_ACCESS_KEY_ID: Optional[str] = Field(default=None)
+    AWS_SECRET_ACCESS_KEY: Optional[str] = Field(default=None)
+    AWS_S3_BUCKET: str = Field(default="dataverse")
+
     # Claude AI
-    ANTHROPIC_API_KEY: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
-    CLAUDE_MODEL: str = Field(default="claude-3-5-sonnet-20241022", env="CLAUDE_MODEL")
+    ANTHROPIC_API_KEY: Optional[str] = Field(default=None)
+    CLAUDE_MODEL: str = Field(default="claude-3-5-sonnet-20241022")
 
     # Stripe billing
-    STRIPE_SECRET_KEY: Optional[str] = Field(default=None, env="STRIPE_SECRET_KEY")
-    STRIPE_WEBHOOK_SECRET: Optional[str] = Field(default=None, env="STRIPE_WEBHOOK_SECRET")
-    STRIPE_PRICE_PRO_MONTHLY: Optional[str] = Field(default=None, env="STRIPE_PRICE_PRO_MONTHLY")
-    STRIPE_PRICE_TEAM_MONTHLY: Optional[str] = Field(default=None, env="STRIPE_PRICE_TEAM_MONTHLY")
-    APP_BASE_URL: str = Field(default="http://localhost:3000", env="APP_BASE_URL")
+    STRIPE_SECRET_KEY: Optional[str] = Field(default=None)
+    STRIPE_WEBHOOK_SECRET: Optional[str] = Field(default=None)
+    STRIPE_PRICE_PRO_MONTHLY: Optional[str] = Field(default=None)
+    STRIPE_PRICE_TEAM_MONTHLY: Optional[str] = Field(default=None)
+    APP_BASE_URL: str = Field(default="http://localhost:3000")
 
     # Sentry
-    SENTRY_DSN: Optional[str] = Field(default=None, env="SENTRY_DSN")
-    SENTRY_TRACES_SAMPLE_RATE: float = Field(default=0.1, env="SENTRY_TRACES_SAMPLE_RATE")
-    SENTRY_PROFILES_SAMPLE_RATE: float = Field(default=0.0, env="SENTRY_PROFILES_SAMPLE_RATE")
+    SENTRY_DSN: Optional[str] = Field(default=None)
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(default=0.1)
+    SENTRY_PROFILES_SAMPLE_RATE: float = Field(default=0.0)
 
-    class Config:
-        # Resolve .env located at the dataverse_backend project root so
-        # settings load correctly when the process cwd is the workspace root.
-        env_file = str((Path(__file__).resolve().parents[2] / ".env"))
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=str((Path(__file__).resolve().parents[2] / ".env")),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @property
     def cors_origins_list(self) -> List[str]:

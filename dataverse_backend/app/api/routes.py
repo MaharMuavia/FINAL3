@@ -24,6 +24,7 @@ from ..core.logger import logger
 from ..agents.retail_detector_agent import RetailDetectorAgent
 from ..agents.eda_analytics_agent import EDAAgent
 from ..services.data_profiler import profile_dataframe
+from ..services.dataset_classifier import classify_dataset
 from ..agents.automl_agent import AutoMLAgent
 from ..workflow.memory.session_store import clear_session as clear_workflow_session, load_session, save_session
 from ..core.celery_config import celery_app
@@ -128,8 +129,13 @@ async def upload_dataset(
         memory_state.set("retail_validation", {})
 
         dataset_profile = profile_dataframe(df)
+        dataset_classification = classify_dataset(df, filename=file.filename, profile=dataset_profile)
+        dataset_profile["dataset_type"] = dataset_classification["dataset_type"]
+        dataset_profile["dataset_classification"] = dataset_classification
         session_state.set("dataset_profile", dataset_profile)
+        session_state.set("dataset_type", dataset_classification["dataset_type"])
         memory_state.set("dataset_profile", dataset_profile)
+        memory_state.set("dataset_type", dataset_classification["dataset_type"])
 
         logger.info("Dataset uploaded and saved persistently", extra={"session_id": session_id})
 
@@ -150,7 +156,7 @@ async def upload_dataset(
         if is_retail:
             msg = "Upload successful and dataset appears to be retail-mart related."
         else:
-            msg = "Upload successful but dataset appears non-retail; downstream analytics may be generic."
+            msg = f"Upload successful. Detected dataset type: {dataset_classification['dataset_type'].replace('_', ' ')}."
 
         # Initialize shared agent memory for the session so the agentic endpoints
         # can reuse schema and dataset references across requests.
@@ -188,6 +194,8 @@ async def upload_dataset(
             column_dtypes=[str(df[col].dtype) for col in df.columns],
             dataset_preview=dataset_profile.get("preview"),
             dataset_profile=dataset_profile,
+            dataset_type=dataset_classification["dataset_type"],
+            column_roles=dataset_profile.get("column_roles"),
             created_at=datetime.utcnow().isoformat(),
         )
     except Exception as e:

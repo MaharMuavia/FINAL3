@@ -530,11 +530,15 @@ class StreamProcessor:
 
             state = SessionState.get(self.session_id)
             previous_result = state.get_value("last_analysis_result") if state else None
-            result = await DataAnalysisAgent().answer_with_optional_llm(df, query, previous_result)
+            filename = state.get_value("dataset_filename") if state else None
+            result = await DataAnalysisAgent().answer_with_optional_llm(df, query, previous_result, filename=filename)
             if state:
                 state.set("last_analysis_result", result)
 
-            await self.send_event("agent_active", f"Analytics agent selected: {result.get('intent', 'analysis')}")
+            await self.send_event(
+                "agent_active",
+                f"Analytics agent selected: {result.get('dataset_type', 'generic')} / {result.get('intent', 'analysis')}",
+            )
             await self.send_event("method", result.get("method", "Calculated using dataframe operations."))
 
             narrative = result.get("answer") or "Analysis complete."
@@ -555,7 +559,7 @@ class StreamProcessor:
             if warnings:
                 await self.send_event("warning", warnings[0], {"warnings": warnings})
 
-            suggestions = self._follow_up_suggestions(result.get("intent"))
+            suggestions = result.get("suggestions") or self._follow_up_suggestions(result.get("intent"), result.get("dataset_type"))
             await self.send_event("suggestions", "Follow-up ideas", {"suggestions": suggestions})
 
             await self.send_event("complete", "Analysis complete")
@@ -574,7 +578,14 @@ class StreamProcessor:
             except Exception:
                 await self.send_event("error", f"Processing failed: {str(e)}")
 
-    def _follow_up_suggestions(self, intent: str | None) -> list[str]:
+    def _follow_up_suggestions(self, intent: str | None, dataset_type: str | None = None) -> list[str]:
+        if dataset_type:
+            try:
+                from ..services.recommendation_engine import follow_up_suggestions
+
+                return follow_up_suggestions(dataset_type, {})
+            except Exception:
+                pass
         if intent == "trending_products":
             return ["Which products are declining?", "Show monthly revenue trend", "What should I stock more?"]
         if intent == "top_products":

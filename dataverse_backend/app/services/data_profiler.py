@@ -1,4 +1,4 @@
-"""Dataset profiling and semantic column detection for business analytics."""
+"""Dataset profiling and semantic column detection for dataset-aware analytics."""
 from __future__ import annotations
 
 from difflib import SequenceMatcher
@@ -9,7 +9,7 @@ import pandas as pd
 
 SEMANTIC_HINTS: dict[str, list[str]] = {
     "date": ["date", "order_date", "created_at", "timestamp", "time", "day", "month"],
-    "product": ["product", "product_name", "item", "sku", "title", "name"],
+    "product": ["product", "product_name", "item", "sku", "item_name"],
     "revenue": ["sales", "revenue", "amount", "total", "total_sales", "sales_amount"],
     "quantity": ["quantity", "qty", "units", "units_sold", "volume"],
     "price": ["price", "unit_price", "cost", "rate"],
@@ -18,6 +18,58 @@ SEMANTIC_HINTS: dict[str, list[str]] = {
     "customer": ["customer", "customer_id", "buyer", "client", "user"],
     "order_id": ["order_id", "order", "invoice", "transaction", "receipt"],
     "profit": ["profit", "margin", "net_profit", "gross_profit"],
+}
+
+PRIMARY_ROLES = [
+    "business_name",
+    "website",
+    "employee_range",
+    "revenue_range",
+    "country",
+    "region",
+    "industry",
+    "business_id",
+    "product",
+    "sales_amount",
+    "quantity",
+    "order_date",
+    "customer",
+    "category",
+    "transaction_date",
+    "generic_text",
+    "generic_id",
+    "unknown",
+]
+
+ROLE_HINTS: dict[str, set[str]] = {
+    "business_name": {"business_name", "company_name", "organization", "company", "organisation"},
+    "website": {"business_website", "website", "url", "domain", "web_site", "site"},
+    "employee_range": {
+        "business_number_of_employees_range",
+        "employees",
+        "employee_range",
+        "staff_size",
+        "number_of_employees",
+        "employee_count_range",
+    },
+    "revenue_range": {
+        "business_yearly_revenue_range",
+        "revenue_range",
+        "annual_revenue",
+        "yearly_revenue",
+        "business_revenue_range",
+    },
+    "country": {"business_country_name", "country", "country_name"},
+    "region": {"business_region", "region", "state", "city", "province", "territory", "area", "location"},
+    "industry": {"business_naics_description", "industry", "sector", "naics", "naics_description"},
+    "business_id": {"business_id", "company_id", "lead_id"},
+    "product": {"product", "product_name", "item", "sku", "item_name"},
+    "sales_amount": {"sales", "revenue", "amount", "total", "total_sales", "sales_amount", "net_sales"},
+    "quantity": {"quantity", "qty", "units", "units_sold", "volume"},
+    "order_date": {"order_date", "sale_date", "sales_date", "purchase_date"},
+    "customer": {"customer", "customer_name", "customer_id", "client", "buyer"},
+    "category": {"category", "department", "segment", "type", "class"},
+    "transaction_date": {"transaction_date", "txn_date", "expense_date", "income_date", "posted_date"},
 }
 
 
@@ -57,6 +109,94 @@ def _looks_like_date(series: pd.Series) -> bool:
     return bool(parsed.notna().sum() >= max(2, int(len(series.dropna()) * 0.55)))
 
 
+def _is_numeric_like(series: pd.Series) -> bool:
+    if pd.api.types.is_numeric_dtype(series):
+        return True
+    sample = series.dropna()
+    if sample.empty:
+        return False
+    numeric = pd.to_numeric(sample, errors="coerce")
+    return bool(numeric.notna().sum() >= max(2, int(len(sample) * 0.7)))
+
+
+def _looks_like_range(series: pd.Series) -> bool:
+    sample = series.dropna().astype(str).head(30)
+    if sample.empty:
+        return False
+    rangeish = sample.str.contains(r"\d+\s*[-–]\s*\d+|\$|m\b|million|k\b|employees?", case=False, regex=True)
+    return bool(rangeish.sum() >= max(1, int(len(sample) * 0.4)))
+
+
+def _missing_mask(series: pd.Series) -> pd.Series:
+    mask = series.isna()
+    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+        mask = mask | (series.astype(str).str.strip() == "")
+    return mask
+
+
+def detect_column_roles(df: pd.DataFrame) -> dict[str, str]:
+    """Return a role for every column without making sales-specific assumptions."""
+    roles: dict[str, str] = {}
+    for column in df.columns:
+        name = str(column)
+        normalized = _normalize(name)
+        compact = normalized.replace("_", "")
+        series = df[column]
+
+        role = "unknown"
+        if normalized in ROLE_HINTS["business_name"]:
+            role = "business_name"
+        elif normalized in ROLE_HINTS["website"] or any(token in normalized for token in ["website", "url", "domain"]):
+            role = "website"
+        elif normalized in ROLE_HINTS["employee_range"] or ("employee" in normalized and _looks_like_range(series)):
+            role = "employee_range"
+        elif normalized in ROLE_HINTS["revenue_range"] or ("revenue" in normalized and _looks_like_range(series) and not _is_numeric_like(series)):
+            role = "revenue_range"
+        elif normalized in ROLE_HINTS["country"] or compact in {"businesscountryname", "countryname"}:
+            role = "country"
+        elif normalized in ROLE_HINTS["industry"] or "naics" in normalized:
+            role = "industry"
+        elif normalized in ROLE_HINTS["business_id"]:
+            role = "business_id"
+        elif normalized in ROLE_HINTS["product"]:
+            role = "product"
+        elif normalized in ROLE_HINTS["customer"]:
+            role = "customer"
+        elif normalized in ROLE_HINTS["order_date"] or ("order" in normalized and "date" in normalized):
+            role = "order_date"
+        elif normalized in ROLE_HINTS["transaction_date"] or ("transaction" in normalized and "date" in normalized):
+            role = "transaction_date"
+        elif normalized in ROLE_HINTS["quantity"] and _is_numeric_like(series):
+            role = "quantity"
+        elif normalized in ROLE_HINTS["sales_amount"] and _is_numeric_like(series):
+            role = "sales_amount"
+        elif normalized in ROLE_HINTS["category"]:
+            role = "category"
+        elif normalized in ROLE_HINTS["region"]:
+            role = "region"
+        elif _looks_like_date(series):
+            role = "transaction_date" if "transaction" in normalized else "order_date"
+        elif normalized.endswith("_id") or normalized == "id" or compact.endswith("id"):
+            role = "generic_id"
+        elif pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+            role = "generic_text"
+
+        roles[name] = role
+    return roles
+
+
+def _semantic_from_roles(column_roles: dict[str, str]) -> dict[str, str | None]:
+    semantic: dict[str, str | None] = {role: None for role in PRIMARY_ROLES if role not in {"generic_text", "unknown"}}
+    for column, role in column_roles.items():
+        if role in semantic and semantic[role] is None:
+            semantic[role] = column
+
+    semantic["date"] = semantic.get("order_date") or semantic.get("transaction_date")
+    semantic["revenue"] = semantic.get("sales_amount")
+    semantic["region"] = semantic.get("region") or semantic.get("country")
+    return semantic
+
+
 def _safe_value(value: Any) -> Any:
     if pd.isna(value):
         return None
@@ -75,38 +215,21 @@ def dataframe_preview(df: pd.DataFrame, rows: int = 10) -> list[dict[str, Any]]:
 
 
 def detect_semantic_columns(df: pd.DataFrame) -> dict[str, str | None]:
-    """Detect common business roles using column names plus basic dtype checks."""
-    detected: dict[str, str | None] = {role: None for role in SEMANTIC_HINTS}
+    """Detect common business roles using explicit role rules plus legacy aliases."""
+    column_roles = detect_column_roles(df)
+    detected = _semantic_from_roles(column_roles)
 
-    for role, hints in SEMANTIC_HINTS.items():
+    for role in ("price", "profit", "order_id"):
         best_column: str | None = None
         best_score = 0.0
         for column in df.columns:
             series = df[column]
-            score = _name_score(str(column), hints)
-
-            if role == "date":
-                if _looks_like_date(series):
-                    score = max(score, 0.93)
-                elif pd.api.types.is_numeric_dtype(series):
-                    score *= 0.35
-            elif role in {"revenue", "quantity", "price", "profit"}:
-                if pd.api.types.is_numeric_dtype(series):
-                    score += 0.12
-                else:
-                    numeric = pd.to_numeric(series, errors="coerce")
-                    if numeric.notna().sum() >= max(2, int(len(series.dropna()) * 0.7)):
-                        score += 0.08
-                    else:
-                        score *= 0.45
-            elif role in {"product", "category", "region", "customer", "order_id"}:
-                if pd.api.types.is_numeric_dtype(series) and role not in {"customer", "order_id"}:
-                    score *= 0.45
-
+            score = _name_score(str(column), SEMANTIC_HINTS[role])
+            if role in {"price", "profit"} and not _is_numeric_like(series):
+                score *= 0.35
             if score > best_score:
                 best_score = score
                 best_column = str(column)
-
         detected[role] = best_column if best_score >= 0.58 else None
 
     return detected
@@ -131,8 +254,9 @@ def coerce_analysis_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
     df = coerce_analysis_dataframe(df)
+    column_roles = detect_column_roles(df)
     semantic_columns = detect_semantic_columns(df)
-    missing = df.isna().sum()
+    missing = pd.Series({column: int(_missing_mask(df[column]).sum()) for column in df.columns})
     missing_pct = (missing / max(1, len(df)) * 100).round(2)
     numeric_columns = df.select_dtypes(include=["number"]).columns.tolist()
     date_columns = [
@@ -168,7 +292,7 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
                 "unique": int(df[column].nunique(dropna=True)),
                 "role": next(
                     (role for role, role_column in semantic_columns.items() if role_column == column),
-                    None,
+                    column_roles.get(str(column)),
                 ),
             }
         )
@@ -180,12 +304,13 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
     duplicate_penalty = duplicate_rows / max(1, len(df))
     quality_score = max(0.0, min(100.0, (completeness - duplicate_penalty) * 100))
 
-    return {
+    profile = {
         "row_count": int(len(df)),
         "column_count": int(len(df.columns)),
         "columns": [str(column) for column in df.columns],
         "dtypes": {str(column): str(dtype) for column, dtype in df.dtypes.items()},
         "semantic_columns": semantic_columns,
+        "column_roles": column_roles,
         "numeric_columns": [str(column) for column in numeric_columns],
         "date_columns": [str(column) for column in date_columns],
         "text_columns": [str(column) for column in text_columns],
@@ -203,3 +328,14 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
         "column_profiles": column_profiles,
         "preview": dataframe_preview(df),
     }
+
+    try:
+        from .dataset_classifier import classify_dataset
+
+        classification = classify_dataset(df, profile=profile)
+        profile["dataset_type"] = classification["dataset_type"]
+        profile["dataset_classification"] = classification
+    except Exception:
+        profile["dataset_type"] = "generic"
+
+    return profile

@@ -1,11 +1,8 @@
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List
 from jinja2 import Template
 import os
 from .core.tool_registry import ToolRegistry, SessionContext
 from ..llm.llm_client import LLMClient
-
-if TYPE_CHECKING:
-    from ..memory.conversation_memory import ConversationMemory
 
 
 class ProactiveInsightAgent:
@@ -19,9 +16,13 @@ class ProactiveInsightAgent:
         self,
         dataset_path: str,
         session_id: str,
-        memory: "ConversationMemory"
+        memory: Any
     ) -> List[Dict[str, Any]]:
         """Generate 3 proactive insights for a newly uploaded dataset."""
+        from ..memory.conversation_memory import ConversationMemory
+
+        if not isinstance(memory, ConversationMemory):
+            raise TypeError("memory must be a ConversationMemory instance")
 
         # Get dataset profile first
         session = memory.get_session(session_id)

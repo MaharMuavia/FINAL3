@@ -14,10 +14,14 @@ export type UploadResponse = {
   column_names?: string[];
   column_dtypes?: string[];
   dataset_preview?: Array<Record<string, unknown>>;
+  dataset_type?: string;
+  column_roles?: Record<string, string>;
   dataset_profile?: {
     row_count?: number;
     column_count?: number;
     semantic_columns?: Record<string, string | null>;
+    column_roles?: Record<string, string>;
+    dataset_type?: string;
     missing_values?: Record<string, { count: number; pct: number }>;
     numeric_summary?: Record<string, Record<string, number | null>>;
     quality?: {
