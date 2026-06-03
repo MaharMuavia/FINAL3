@@ -71,6 +71,36 @@ def _task_for_column(series: pd.Series) -> str | None:
     return None
 
 
+def _target_confidence(column: str, series: pd.Series, task_type: str) -> float:
+    non_null = series.dropna()
+    usable_ratio = float(len(non_null)) / max(1, len(series))
+    unique_count = int(non_null.nunique(dropna=True))
+    unique_ratio = unique_count / max(1, len(non_null))
+    if task_type == "regression":
+        base = 0.55
+        base += min(0.2, _name_score(column, REGRESSION_HINTS) * 0.2)
+        if pd.api.types.is_numeric_dtype(series):
+            base += 0.12
+        if unique_ratio > 0.7:
+            base += 0.08
+        if unique_count < 5:
+            base -= 0.25
+    else:
+        base = 0.52
+        base += min(0.2, _name_score(column, CLASSIFICATION_HINTS) * 0.2)
+        if unique_count <= max(10, int(len(non_null) * 0.25)):
+            base += 0.12
+        if unique_ratio <= 0.3:
+            base += 0.08
+        if unique_count <= 2:
+            base -= 0.05
+    if is_identifier_like(series, column):
+        base -= 0.45
+    if pd.api.types.is_numeric_dtype(series) and task_type == "classification" and unique_count > 20:
+        base -= 0.15
+    return round(float(max(0.0, min(0.99, base + min(0.12, usable_ratio * 0.12)))), 3)
+
+
 def suggest_targets(df: pd.DataFrame, limit: int = 6) -> list[dict[str, Any]]:
     """Suggest safe prediction targets while avoiding IDs and unique identifiers."""
     suggestions: list[dict[str, Any]] = []
@@ -88,12 +118,13 @@ def suggest_targets(df: pd.DataFrame, limit: int = 6) -> list[dict[str, Any]]:
         if task_type == "classification" and normalized in {"category", "region", "type", "segment"}:
             name_bonus *= 0.45
         usable_rows = int(series.notna().sum())
-        score = 0.45 + min(0.35, name_bonus * 0.35) + min(0.2, usable_rows / max(1, len(df)) * 0.2)
+        score = _target_confidence(str(column), series, task_type)
         suggestions.append(
             {
                 "column": str(column),
                 "task_type": task_type,
                 "score": round(float(score), 3),
+                "confidence": round(float(score), 3),
                 "reason": (
                     "Numeric target suitable for regression"
                     if task_type == "regression"
@@ -101,6 +132,7 @@ def suggest_targets(df: pd.DataFrame, limit: int = 6) -> list[dict[str, Any]]:
                 ),
                 "non_null_rows": usable_rows,
                 "unique_values": int(series.nunique(dropna=True)),
+                "safe": bool(score >= 0.5),
             }
         )
     suggestions.sort(key=lambda item: (item["score"], item["non_null_rows"]), reverse=True)
@@ -111,6 +143,7 @@ def infer_target_column(
     df: pd.DataFrame,
     query: str | None = None,
     selected_target: str | None = None,
+    minimum_confidence: float = 0.0,
 ) -> dict[str, Any] | None:
     """Infer a target from an explicit selection, query wording, or ranked suggestions."""
     suggestions = suggest_targets(df, limit=max(6, len(df.columns)))
@@ -130,10 +163,15 @@ def infer_target_column(
                     key=lambda item: _name_score(item["column"], tuple(aliases)),
                     default=None,
                 )
-                if best and _name_score(best["column"], tuple(aliases)) >= 0.55:
+                if best and _name_score(best["column"], tuple(aliases)) >= 0.55 and best["score"] >= minimum_confidence:
                     return best
         for suggestion in suggestions:
-            if _normalize(suggestion["column"]).replace("_", " ") in query_lower:
+            if _normalize(suggestion["column"]).replace("_", " ") in query_lower and suggestion["score"] >= minimum_confidence:
                 return suggestion
 
-    return suggestions[0] if suggestions else None
+    if not suggestions:
+        return None
+    best = suggestions[0]
+    if best["score"] < minimum_confidence:
+        return None
+    return best

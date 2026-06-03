@@ -134,6 +134,31 @@ def _missing_mask(series: pd.Series) -> pd.Series:
     return mask
 
 
+def _skewness_label(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "unknown"
+    if abs(value) < 0.5:
+        return "approximately symmetric"
+    if value > 0:
+        return "right-skewed"
+    return "left-skewed"
+
+
+def _cardinality_label(unique_count: int, row_count: int) -> str:
+    if row_count <= 0:
+        return "unknown"
+    ratio = unique_count / row_count
+    if unique_count <= 1:
+        return "constant"
+    if ratio <= 0.05:
+        return "low"
+    if ratio <= 0.25:
+        return "medium"
+    if ratio <= 0.75:
+        return "high"
+    return "very_high"
+
+
 def detect_column_roles(df: pd.DataFrame) -> dict[str, str]:
     """Return a role for every column without making sales-specific assumptions."""
     roles: dict[str, str] = {}
@@ -269,27 +294,88 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
     ]
 
     numeric_summary: dict[str, dict[str, float | None]] = {}
+    skewness: dict[str, dict[str, Any]] = {}
+    categorical_summary: dict[str, dict[str, Any]] = {}
+    cardinality: dict[str, dict[str, Any]] = {}
+    suspicious_columns: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    try:
+        from .target_inference import is_identifier_like
+    except Exception:  # pragma: no cover - defensive import guard
+        is_identifier_like = None
+
     for column in numeric_columns:
         series = pd.to_numeric(df[column], errors="coerce").dropna()
         if series.empty:
             numeric_summary[column] = {"min": None, "max": None, "mean": None, "median": None}
             continue
+        skew_value = float(series.skew()) if len(series) > 2 else None
         numeric_summary[column] = {
             "min": round(float(series.min()), 4),
             "max": round(float(series.max()), 4),
             "mean": round(float(series.mean()), 4),
             "median": round(float(series.median()), 4),
+            "std": round(float(series.std(ddof=1)), 4) if len(series) > 1 else 0.0,
         }
+        skewness[column] = {
+            "value": None if skew_value is None or pd.isna(skew_value) else round(float(skew_value), 4),
+            "label": _skewness_label(skew_value),
+        }
+
+    for column in text_columns:
+        series = df[column].astype(str)
+        non_null = series[~_missing_mask(df[column])]
+        unique_count = int(non_null.nunique(dropna=True))
+        top_values = non_null.value_counts(dropna=True).head(10)
+        categorical_summary[column] = {
+            "unique_count": unique_count,
+            "unique_ratio": round(unique_count / max(1, len(df)), 4),
+            "top_values": [{"value": str(idx), "count": int(count)} for idx, count in top_values.items()],
+        }
+        cardinality[column] = {
+            "unique_count": unique_count,
+            "label": _cardinality_label(unique_count, len(df)),
+            "ratio": round(unique_count / max(1, len(df)), 4),
+        }
+        missing_count = int(missing[column])
+        if unique_count <= 1 or (is_identifier_like and is_identifier_like(df[column], str(column))):
+            suspicious_columns.append({"column": str(column), "reason": "identifier_like_or_constant", "unique_count": unique_count})
+        elif cardinality[column]["label"] in {"high", "very_high"}:
+            suspicious_columns.append({"column": str(column), "reason": "high_cardinality", "unique_count": unique_count})
+        if missing_count and missing_count / max(1, len(df)) >= 0.3:
+            suspicious_columns.append({"column": str(column), "reason": "high_missingness", "missing_count": missing_count})
+
+    for column in df.columns:
+        unique_count = int(df[column].nunique(dropna=True))
+        cardinality.setdefault(
+            str(column),
+            {
+                "unique_count": unique_count,
+                "label": _cardinality_label(unique_count, len(df)),
+                "ratio": round(unique_count / max(1, len(df)), 4),
+            },
+        )
+        if pd.api.types.is_numeric_dtype(df[column]):
+            cardinality[str(column)]["numeric"] = True
 
     column_profiles = []
     for column in df.columns:
+        unique_count = int(df[column].nunique(dropna=True))
+        unique_ratio = round(unique_count / max(1, len(df)), 4)
+        missing_count = int(missing[column])
+        missing_ratio = float(missing_pct[column])
         column_profiles.append(
             {
                 "name": str(column),
                 "dtype": str(df[column].dtype),
-                "missing": int(missing[column]),
-                "missing_pct": float(missing_pct[column]),
-                "unique": int(df[column].nunique(dropna=True)),
+                "missing": missing_count,
+                "missing_pct": missing_ratio,
+                "unique": unique_count,
+                "unique_ratio": unique_ratio,
+                "is_constant": unique_count <= 1,
+                "is_identifier_like": bool(is_identifier_like(df[column], str(column))) if is_identifier_like else False,
+                "cardinality": cardinality[str(column)]["label"],
                 "role": next(
                     (role for role, role_column in semantic_columns.items() if role_column == column),
                     column_roles.get(str(column)),
@@ -302,22 +388,52 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
     total_cells = int(df.size)
     completeness = 1 - (total_missing / total_cells if total_cells else 0)
     duplicate_penalty = duplicate_rows / max(1, len(df))
-    quality_score = max(0.0, min(100.0, (completeness - duplicate_penalty) * 100))
+    high_missing_penalty = sum(1 for count in missing if count / max(1, len(df)) >= 0.3)
+    high_cardinality_penalty = sum(1 for meta in cardinality.values() if meta["label"] in {"high", "very_high"})
+    quality_score = max(0.0, min(100.0, (completeness - duplicate_penalty - high_missing_penalty * 0.02 - high_cardinality_penalty * 0.01) * 100))
+
+    if len(df) < 20:
+        warnings.append("too_few_rows")
+    if total_missing:
+        warnings.append("missing_values_present")
+    if duplicate_rows:
+        warnings.append("duplicate_rows_present")
+    if not date_columns:
+        warnings.append("no_date_column")
+    if not numeric_columns:
+        warnings.append("no_numeric_column")
+    if high_cardinality_penalty:
+        warnings.append("high_cardinality_columns")
 
     profile = {
         "row_count": int(len(df)),
         "column_count": int(len(df.columns)),
+        "shape": [int(len(df)), int(len(df.columns))],
         "columns": [str(column) for column in df.columns],
+        "schema": {
+            str(column): {
+                "dtype": str(dtype),
+                "missing": int(missing[column]),
+                "missing_pct": float(missing_pct[column]),
+                "unique": int(df[column].nunique(dropna=True)),
+            }
+            for column, dtype in df.dtypes.items()
+        },
         "dtypes": {str(column): str(dtype) for column, dtype in df.dtypes.items()},
         "semantic_columns": semantic_columns,
         "column_roles": column_roles,
         "numeric_columns": [str(column) for column in numeric_columns],
         "date_columns": [str(column) for column in date_columns],
         "text_columns": [str(column) for column in text_columns],
+        "numeric_stats": numeric_summary,
+        "categorical_stats": categorical_summary,
         "missing_values": {
             str(column): {"count": int(missing[column]), "pct": float(missing_pct[column])}
             for column in df.columns
         },
+        "skewness": skewness,
+        "cardinality": cardinality,
+        "suspicious_columns": suspicious_columns,
         "numeric_summary": numeric_summary,
         "quality": {
             "score": round(float(quality_score), 1),
@@ -325,6 +441,13 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
             "total_missing": total_missing,
             "total_cells": total_cells,
         },
+        "data_quality_score": round(float(quality_score), 1),
+        "warnings": warnings,
+        "recommendations": [
+            "Review high-missing or high-cardinality columns before modeling.",
+            "Inspect identifier-like columns to avoid leakage.",
+            "Use the inferred semantic columns to drive trend and prediction analysis.",
+        ],
         "column_profiles": column_profiles,
         "preview": dataframe_preview(df),
     }

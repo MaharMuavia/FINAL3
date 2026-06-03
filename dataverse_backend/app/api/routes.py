@@ -23,8 +23,6 @@ from ..orchestrator.agent_orchestrator import AgentOrchestrator
 from ..core.logger import logger
 from ..agents.retail_detector_agent import RetailDetectorAgent
 from ..agents.eda_analytics_agent import EDAAgent
-from ..services.data_profiler import profile_dataframe
-from ..services.dataset_classifier import classify_dataset
 from ..agents.automl_agent import AutoMLAgent
 from ..workflow.memory.session_store import clear_session as clear_workflow_session, load_session, save_session
 from ..core.celery_config import celery_app
@@ -43,7 +41,6 @@ from .schemas import (
     TrainModelResponse,
     MLJobStatusResponse,
 )
-from .upload_parsing import parse_uploaded_dataframe
 import asyncio
 import os
 
@@ -61,21 +58,8 @@ def session_status(session_id: str):
     if not state:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    df = state.get_value("raw_dataframe")
-    dataset = None
-    if df is not None:
-        dataset = {
-            "datasetId": session_id,
-            "filename": state.get_value("dataset_filename") or "Uploaded dataset",
-            "columnNames": list(df.columns),
-            "columnDtypes": [str(df[col].dtype) for col in df.columns],
-            "rowCount": int(len(df)),
-            "uploadedAt": datetime.utcnow().isoformat(),
-        }
-
     return SessionStatusResponse(
         session_id=session_id,
-        dataset=dataset,
         dataset_is_retail=state.get_value("dataset_is_retail"),
         retail_validation=state.get_value("retail_validation"),
         execution_trace=state.get_value("execution_trace"),
@@ -101,7 +85,13 @@ async def upload_dataset(
     session_id = str(uuid.uuid4())
 
     try:
-        df = parse_uploaded_dataframe(file.filename or "upload.csv", contents)
+        # Parse file based on extension
+        if file.filename.lower().endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(contents))
+        elif file.filename.lower().endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(io.BytesIO(contents))
+        else:
+            raise HTTPException(400, "Unsupported file format")
     except Exception as e:
         logger.exception("Failed to read uploaded file")
         raise HTTPException(status_code=400, detail=f"Invalid file upload: {e}")
@@ -110,13 +100,6 @@ async def upload_dataset(
         # Create persistent session
         from ..state.persistent_session_state import session_manager
         session_state = session_manager.get_session(session_id)
-        memory_state = SessionState.get(session_id)
-
-        # Keep the lightweight demo path working even when PostgreSQL is not
-        # configured. Streaming and status routes read from this in-memory state.
-        session_state.set("raw_dataframe", df)
-        memory_state.set("raw_dataframe", df)
-        memory_state.set("dataset_filename", file.filename or "upload.csv")
 
         if db is not None:
             await session_state.create_session(db, file.filename or "upload.csv", df)
@@ -125,17 +108,6 @@ async def upload_dataset(
         # Store additional metadata
         session_state.set("dataset_is_retail", False)  # Will be updated by retail agent
         session_state.set("retail_validation", {})
-        memory_state.set("dataset_is_retail", False)
-        memory_state.set("retail_validation", {})
-
-        dataset_profile = profile_dataframe(df)
-        dataset_classification = classify_dataset(df, filename=file.filename, profile=dataset_profile)
-        dataset_profile["dataset_type"] = dataset_classification["dataset_type"]
-        dataset_profile["dataset_classification"] = dataset_classification
-        session_state.set("dataset_profile", dataset_profile)
-        session_state.set("dataset_type", dataset_classification["dataset_type"])
-        memory_state.set("dataset_profile", dataset_profile)
-        memory_state.set("dataset_type", dataset_classification["dataset_type"])
 
         logger.info("Dataset uploaded and saved persistently", extra={"session_id": session_id})
 
@@ -147,8 +119,6 @@ async def upload_dataset(
         # Update session with retail info
         session_state.set("dataset_is_retail", is_retail)
         session_state.set("retail_validation", validation)
-        memory_state.set("dataset_is_retail", is_retail)
-        memory_state.set("retail_validation", validation)
 
         if db is not None:
             await session_state.persist_metadata(db)
@@ -156,7 +126,7 @@ async def upload_dataset(
         if is_retail:
             msg = "Upload successful and dataset appears to be retail-mart related."
         else:
-            msg = f"Upload successful. Detected dataset type: {dataset_classification['dataset_type'].replace('_', ' ')}."
+            msg = "Upload successful but dataset appears non-retail; downstream analytics may be generic."
 
         # Initialize shared agent memory for the session so the agentic endpoints
         # can reuse schema and dataset references across requests.
@@ -189,13 +159,6 @@ async def upload_dataset(
             dataset_filename=file.filename,
             dataset_rows=int(len(df)),
             dataset_cols=int(len(df.columns)),
-            dataset_id=session_id,
-            column_names=list(df.columns),
-            column_dtypes=[str(df[col].dtype) for col in df.columns],
-            dataset_preview=dataset_profile.get("preview"),
-            dataset_profile=dataset_profile,
-            dataset_type=dataset_classification["dataset_type"],
-            column_roles=dataset_profile.get("column_roles"),
             created_at=datetime.utcnow().isoformat(),
         )
     except Exception as e:
@@ -573,7 +536,10 @@ async def workflow_upload_dataset(file: UploadFile = File(...)):
 
     try:
         # Parse file
-        df = parse_uploaded_dataframe(file.filename or "upload.csv", contents)
+        if file.filename.lower().endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(contents))
+        else:
+            df = pd.read_excel(io.BytesIO(contents))
 
         # Save to storage
         os.makedirs("storage/datasets", exist_ok=True)
@@ -815,7 +781,7 @@ async def batch_predictions(
     """
     try:
         contents = await batch_file.read()
-        batch_df = parse_uploaded_dataframe(batch_file.filename or "batch.csv", contents)
+        batch_df = pd.read_csv(io.BytesIO(contents))
         
         # Load model and generate predictions
         # TODO: Implement model loading from model registry

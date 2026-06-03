@@ -106,8 +106,9 @@ docker compose up --build
 Main services:
 
 - Backend API: http://localhost:8000
-- PostgreSQL: localhost:5432
-- Redis: localhost:6379
+- PostgreSQL: internal to the Docker Compose network
+- Redis: internal to the Docker Compose network
+- Only the backend and frontend are published on the host by default
 
 ## Useful API Examples
 

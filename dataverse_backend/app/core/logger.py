@@ -1,6 +1,6 @@
 """Logging system for DataVerse AI.
 
-This module configures a rotating file logger and a console handler. Designed to be imported and used across modules.
+This module configures a rotating file logger and a console handler.
 """
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import logging
 import logging.handlers
 import json
 from pathlib import Path
-from typing import Optional
 
 from .config import settings
 
@@ -30,15 +29,18 @@ def get_logger(name: str) -> logging.Logger:
     log_dir = Path(settings.LOG_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    logger = logging.getLogger(name)
-    logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
+    _logger = logging.getLogger(name)
+    _logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
-    if not logger.handlers:
+    if not _logger.handlers:
         # File handler (rotating)
         file_handler = logging.handlers.RotatingFileHandler(
-            log_dir / "dataverse_backend.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            log_dir / "dataverse_backend.log",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
         )
-        file_formatter = JsonFormatter() if settings.LOG_JSON else logging.Formatter(
+        file_formatter = logging.Formatter(
             "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
         )
         file_handler.setFormatter(file_formatter)
@@ -46,14 +48,14 @@ def get_logger(name: str) -> logging.Logger:
 
         # Console handler
         console_handler = logging.StreamHandler()
-        console_formatter = JsonFormatter() if settings.LOG_JSON else logging.Formatter("%(levelname)s | %(name)s | %(message)s")
+        console_formatter = logging.Formatter("%(levelname)s | %(name)s | %(message)s")
         console_handler.setFormatter(console_formatter)
 
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-        logger.propagate = False
+        _logger.addHandler(file_handler)
+        _logger.addHandler(console_handler)
+        _logger.propagate = False
 
-    return logger
+    return _logger
 
 
 logger = get_logger("dataverse_backend")

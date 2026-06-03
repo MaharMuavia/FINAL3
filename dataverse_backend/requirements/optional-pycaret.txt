@@ -1,6 +1,0 @@
-# Optional AutoML dependency.
-#
-# PyCaret 3.2.1 is not installable on Python 3.12, which is the Python
-# version used by this project environment. Install this extra only when using
-# Python 3.10 or 3.11 and when you specifically need the legacy PyCaret tools.
-pycaret==3.2.1; python_version < "3.12"

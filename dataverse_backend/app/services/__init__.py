@@ -1,1 +1,1 @@
-"""Focused service layer for SaaS-oriented application use cases."""
+"""DataVerse AI service layer — focused data analytics services."""
