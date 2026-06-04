@@ -1,0 +1,34 @@
+- generic [active] [ref=e1]:
+  - button "Open Next.js Dev Tools" [ref=e355] [cursor=pointer]:
+    - img [ref=e356]
+  - alert [ref=e359]
+  - generic [ref=e364]:
+    - generic [ref=e365]:
+      - generic [ref=e366]:
+        - heading "Welcome back" [level=1] [ref=e367]
+        - paragraph [ref=e368]: Sign in and continue your analysis workspace.
+      - generic [ref=e369]:
+        - generic [ref=e370]:
+          - generic [ref=e371]: Email
+          - textbox [ref=e372]
+        - generic [ref=e373]:
+          - generic [ref=e374]: Password
+          - textbox [ref=e375]
+        - button "Sign In" [ref=e376]
+      - generic [ref=e377]:
+        - paragraph [ref=e378]:
+          - text: Don't have an account?
+          - button "Sign up" [ref=e379]
+        - button "Continue as Guest" [ref=e380]
+    - generic [ref=e381]:
+      - generic [ref=e382]:
+        - generic [ref=e383]:
+          - img [ref=e384]
+          - generic [ref=e387]: DataVerse AI
+        - heading "Return to your active analysis." [level=2] [ref=e388]
+        - paragraph [ref=e389]: Continue from uploaded datasets, previous questions, generated charts, and model explanations.
+      - generic [ref=e390]:
+        - generic [ref=e391]:
+          - img [ref=e392]
+          - text: Workspace sync ready
+        - paragraph [ref=e395]: Sign in to keep reports, datasets, and generated insights organized in one place.

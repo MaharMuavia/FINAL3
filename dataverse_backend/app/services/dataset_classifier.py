@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 
 
-DATASET_TYPES = {"sales", "business_leads", "customer", "finance", "generic"}
+DATASET_TYPES = {"sales", "business_leads", "customer", "finance", "ai_khata_transaction_report", "business_transaction_dataset", "generic"}
 
 
 def _roles_from_profile(df: pd.DataFrame, profile: dict[str, Any] | None = None) -> dict[str, str]:
@@ -26,6 +26,26 @@ def classify_dataset(
     roles = _roles_from_profile(df, profile)
     role_set = set(roles.values())
     filename_norm = (filename or "").lower()
+
+    from .ai_khata import ai_khata_dataset_type
+
+    ai_khata_type = ai_khata_dataset_type(df)
+    if ai_khata_type:
+        return {
+            "dataset_type": ai_khata_type,
+            "confidence": 0.96,
+            "scores": {
+                "sales": 0.0,
+                "business_leads": 0.0,
+                "customer": 0.0,
+                "finance": 0.0,
+                "ai_khata_transaction_report": 0.96 if ai_khata_type == "ai_khata_transaction_report" else 0.0,
+                "business_transaction_dataset": 0.96 if ai_khata_type == "business_transaction_dataset" else 0.0,
+                "generic": 0.0,
+            },
+            "signals": ["date_category_item_amount_schema", "transaction_category_values"],
+            "column_roles": roles,
+        }
 
     scores = {
         "sales": 0.0,

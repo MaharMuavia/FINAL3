@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+<<<<<<< HEAD
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -17,6 +18,12 @@ from fastapi.responses import JSONResponse
 
 from .api.routes import router as dataset_router
 from .api.schemas import HealthResponse
+=======
+from .api import routes, auth_routes, stream, graph_routes, ai_routes, billing_routes, dashboard_routes
+from .api import workspace_routes, dataset_routes, conversation_routes, analyze_routes
+from .api import session_routes, dataset_session_routes, report_routes
+from .api.websocket import ws_chat_endpoint
+>>>>>>> 15b8a6d8 (new1)
 from .core.config import settings
 from .core.logger import logger
 
@@ -51,7 +58,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+<<<<<<< HEAD
 # ── Middleware ──────────────────────────────────────────────
+=======
+# Include routers
+app.include_router(auth_routes.router, prefix="/api/auth", tags=["authentication"])
+app.include_router(workspace_routes.router, prefix="/api/workspaces", tags=["workspaces"])
+app.include_router(dataset_routes.router, prefix="/api/workspaces", tags=["datasets"])
+app.include_router(conversation_routes.router, prefix="/api/workspaces", tags=["conversations"])
+app.include_router(dashboard_routes.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(billing_routes.router, prefix="/api/billing", tags=["billing"])
+app.include_router(ai_routes.router, prefix="/api/ai", tags=["ai"])
+app.include_router(session_routes.router, prefix="/api", tags=["chat-sessions"])
+app.include_router(dataset_session_routes.router, prefix="/api", tags=["chat-datasets"])
+app.include_router(report_routes.router, prefix="/api", tags=["reports"])
+app.include_router(analyze_routes.router, prefix="/api/analyze", tags=["analysis"])
+app.include_router(routes.router, prefix="/api", tags=["legacy"])
+app.include_router(stream.router, prefix="/api/stream", tags=["streaming"])
+app.include_router(graph_routes.router, prefix="/api/stream/graph", tags=["langgraph"])
+>>>>>>> 15b8a6d8 (new1)
 
 app.add_middleware(
     CORSMiddleware,

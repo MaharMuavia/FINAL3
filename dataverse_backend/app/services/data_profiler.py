@@ -207,6 +207,23 @@ def detect_column_roles(df: pd.DataFrame) -> dict[str, str]:
             role = "generic_text"
 
         roles[name] = role
+    try:
+        from .ai_khata import ai_khata_columns, is_ai_khata_dataset
+
+        if is_ai_khata_dataset(df):
+            ai_columns = ai_khata_columns(df)
+            if ai_columns.get("date"):
+                roles[str(ai_columns["date"])] = "transaction_date"
+            if ai_columns.get("time"):
+                roles[str(ai_columns["time"])] = "transaction_time"
+            if ai_columns.get("category"):
+                roles[str(ai_columns["category"])] = "transaction_type"
+            if ai_columns.get("item_customer"):
+                roles[str(ai_columns["item_customer"])] = "conditional_item_customer"
+            if ai_columns.get("amount"):
+                roles[str(ai_columns["amount"])] = "transaction_amount"
+    except Exception:
+        pass
     return roles
 
 
@@ -217,7 +234,10 @@ def _semantic_from_roles(column_roles: dict[str, str]) -> dict[str, str | None]:
             semantic[role] = column
 
     semantic["date"] = semantic.get("order_date") or semantic.get("transaction_date")
-    semantic["revenue"] = semantic.get("sales_amount")
+    semantic["amount"] = next((column for column, role in column_roles.items() if role == "transaction_amount"), None)
+    semantic["transaction_type"] = next((column for column, role in column_roles.items() if role == "transaction_type"), None)
+    semantic["item_customer"] = next((column for column, role in column_roles.items() if role == "conditional_item_customer"), None)
+    semantic["revenue"] = semantic.get("sales_amount") or semantic.get("amount")
     semantic["region"] = semantic.get("region") or semantic.get("country")
     return semantic
 
@@ -465,5 +485,14 @@ def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
         profile["dataset_classification"] = classification
     except Exception:
         profile["dataset_type"] = "generic"
+
+    try:
+        from .ai_khata import AI_KHATA_TYPES, business_summary, conditional_item_roles
+
+        if profile.get("dataset_type") in AI_KHATA_TYPES:
+            profile["business_summary"] = business_summary(df)
+            profile["conditional_roles"] = conditional_item_roles(df)
+    except Exception:
+        pass
 
     return profile

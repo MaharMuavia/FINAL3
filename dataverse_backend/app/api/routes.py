@@ -1,19 +1,21 @@
-"""API routes for DataVerse AI."""
+"""Safe lightweight legacy routes.
+
+The full analyst workflow lives under /api/analyze. This module intentionally
+avoids importing the old agent/database orchestration stack.
+"""
 from __future__ import annotations
 
-import io
-import uuid
-from datetime import datetime
-import pandas as pd
-import numpy as np
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query
-from fastapi.responses import FileResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import Any
 
-from ..db.base import get_session
-from ..db.repositories import create_dataset, log_user_query
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
+from ..api.upload_parsing import parse_uploaded_dataframe
+from ..core.config import settings
+from ..services.analysis_pipeline import AnalysisPipeline
+from ..services.data_quality import compute_data_quality
+from ..services.session_store import create_session_id, delete_session as delete_dataset_session, load_dataframe_for_session, persist_dataframe_for_session
+
+<<<<<<< HEAD
 from ..core.auth import get_current_active_user
 from ..api.schemas import User
 from ..core.exceptions import DataLoadError, DataNotFoundError
@@ -43,21 +45,43 @@ from .schemas import (
 )
 import asyncio
 import os
+=======
+>>>>>>> 15b8a6d8 (new1)
 
 router = APIRouter()
 
 
-@router.get("/health", response_model=HealthResponse)
-def health_check():
-    return HealthResponse(status="ok", details={"app": "DataVerse AI backend"})
+@router.get("/health")
+def health_check() -> dict[str, Any]:
+    return {"status": "ok", "details": {"app": settings.APP_NAME, "version": settings.APP_VERSION}}
 
 
-@router.get("/session/{session_id}", response_model=SessionStatusResponse)
-def session_status(session_id: str):
-    state = SessionState.get(session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Session not found")
+@router.post("/upload")
+async def upload_profile(file: UploadFile = File(...)) -> dict[str, Any]:
+    contents = await file.read()
+    filename = file.filename or "upload.csv"
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(contents) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"File exceeds {settings.MAX_UPLOAD_SIZE_MB}MB limit")
+    if not filename.lower().endswith((".csv", ".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Only CSV and Excel files are supported")
+    try:
+        df = parse_uploaded_dataframe(filename, contents)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid file upload: {exc}") from exc
+    session_id = create_session_id()
+    persist_dataframe_for_session(session_id, df, filename=filename)
+    profile = AnalysisPipeline().profile_dataset(df)
+    return {
+        "session_id": session_id,
+        "filename": filename,
+        "dataset_profile": profile,
+        "data_quality": compute_data_quality(df),
+        "message": "Dataset uploaded and profiled. Use /api/analyze/upload for the full analyst report.",
+    }
 
+<<<<<<< HEAD
     return SessionStatusResponse(
         session_id=session_id,
         dataset_is_retail=state.get_value("dataset_is_retail"),
@@ -822,68 +846,52 @@ async def list_trained_models(session_id: str):
         raise HTTPException(500, str(e))
 
 
+=======
+
+@router.get("/session/{session_id}")
+def get_session(session_id: str) -> dict[str, Any]:
+    df, metadata = load_dataframe_for_session(session_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="Session or dataset not found")
+    return {
+        "session_id": session_id,
+        "dataset": {
+            "filename": metadata.get("filename"),
+            "columnNames": [str(col) for col in df.columns],
+            "columnDtypes": [str(df[col].dtype) for col in df.columns],
+            "rowCount": int(len(df)),
+        },
+    }
+
+
+>>>>>>> 15b8a6d8 (new1)
 @router.delete("/session/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session and all associated data."""
+def remove_session(session_id: str) -> dict[str, Any]:
+    deleted = delete_dataset_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session or dataset not found")
+    return {"session_id": session_id, "deleted": True}
+
+
+def clear_workflow_session(session_id: str) -> None:
+    """Compatibility hook for older workflow cache cleanup."""
+    return None
+
+
+async def delete_session(session_id: str) -> dict[str, Any]:
+    """Compatibility helper used by older runtime tests and callers."""
+    deleted_from_memory = False
     try:
-        from ..memory.conversation_memory import get_memory_store
-        
-        memory = get_memory_store()
-        
-        # Remove from memory
-        if session_id in memory.sessions:
-            del memory.sessions[session_id]
-        
-        # Remove from workflow/session cache
-        clear_workflow_session(session_id)
-        
-        return {
-            "session_id": session_id,
-            "deleted": True,
-            "message": "Session and all associated data deleted"
-        }
-    
-    except Exception as e:
-        logger.exception("Session deletion failed")
-        raise HTTPException(500, str(e))
+        from app.memory.conversation_memory import get_memory_store
 
+        memory_store = get_memory_store()
+        sessions = getattr(memory_store, "sessions", None)
+        if isinstance(sessions, dict) and session_id in sessions:
+            sessions.pop(session_id, None)
+            deleted_from_memory = True
+    except Exception:
+        deleted_from_memory = False
 
-@router.post("/export/results")
-async def export_results(
-    session_id: str,
-    format: str = Query("html", description="html|pdf|csv|json|xlsx"),
-    include_visualizations: bool = Query(True),
-    include_code: bool = Query(False)
-):
-    """
-    Export analysis results in multiple formats.
-    
-    Formats:
-    - html: Interactive HTML report
-    - pdf: PDF report with charts
-    - csv: Raw results as CSV
-    - json: Structured JSON data
-    - xlsx: Excel workbook
-    """
-    try:
-        from ..memory.conversation_memory import get_memory_store
-        
-        memory = get_memory_store()
-        session = memory.get_session(session_id)
-        if not session:
-            raise HTTPException(404, "Session not found")
-        
-        # Generate export
-        # TODO: Implement export logic for different formats
-        
-        return {
-            "session_id": session_id,
-            "format": format,
-            "generated_at": datetime.now().isoformat(),
-            "download_url": f"/api/exports/{session_id}_{format}"
-        }
-    
-    except Exception as e:
-        logger.exception("Export failed")
-        raise HTTPException(500, str(e))
-
+    deleted_from_dataset_store = delete_dataset_session(session_id)
+    clear_workflow_session(session_id)
+    return {"session_id": session_id, "deleted": bool(deleted_from_memory or deleted_from_dataset_store)}

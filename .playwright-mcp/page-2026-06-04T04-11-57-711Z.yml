@@ -1,0 +1,37 @@
+- generic [active] [ref=e1]:
+  - button "Open Next.js Dev Tools" [ref=e355] [cursor=pointer]:
+    - img [ref=e356]
+  - alert [ref=e359]
+  - generic [ref=e400]:
+    - generic [ref=e401]:
+      - generic [ref=e402]:
+        - generic [ref=e403]:
+          - img [ref=e404]
+          - generic [ref=e407]: DataVerse AI
+        - heading "Build an analysis workspace in minutes." [level=2] [ref=e408]
+        - paragraph [ref=e409]: Upload data, ask questions, generate visuals, and keep the workflow ready for your next dataset.
+      - generic [ref=e410]:
+        - generic [ref=e411]: Dataset profiling
+        - generic [ref=e412]: Natural language analytics
+        - generic [ref=e413]: Explainable models
+        - generic [ref=e414]: Exportable reports
+    - generic [ref=e415]:
+      - generic [ref=e416]:
+        - heading "Create workspace" [level=1] [ref=e417]
+        - paragraph [ref=e418]: Start simple. You can continue as a guest anytime.
+      - generic [ref=e419]:
+        - generic [ref=e420]:
+          - generic [ref=e421]: Full Name
+          - textbox [ref=e422]
+        - generic [ref=e423]:
+          - generic [ref=e424]: Email
+          - textbox [ref=e425]
+        - generic [ref=e426]:
+          - generic [ref=e427]: Password
+          - textbox [ref=e428]
+        - button "Initialize Workspace" [ref=e429]
+      - generic [ref=e430]:
+        - paragraph [ref=e431]:
+          - text: Already have an account?
+          - button "Sign in" [ref=e432]
+        - button "Continue as Guest" [ref=e433]

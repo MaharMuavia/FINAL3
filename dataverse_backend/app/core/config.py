@@ -49,10 +49,31 @@ class Settings(BaseSettings):
     INTENT_LLM_TIMEOUT: int = Field(default=20, env="INTENT_LLM_TIMEOUT")
 
     # OpenAI for intent parsing
+<<<<<<< HEAD
     OPENAI_API_KEY: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
     OPENAI_API_BASE: Optional[str] = Field(default=None, env="OPENAI_API_BASE")
     OPENAI_CHAT_MODEL: str = Field(default="gpt-5.4", env="OPENAI_CHAT_MODEL")
     OPENAI_INTENT_MODEL: str = Field(default="gpt-5-mini", env="OPENAI_INTENT_MODEL")
+=======
+    OPENAI_API_KEY: Optional[str] = Field(default=None)
+    OPENAI_API_BASE: Optional[str] = Field(default=None)
+    OPENAI_CHAT_MODEL: str = Field(default="gpt-4o-mini")
+    OPENAI_INTENT_MODEL: str = Field(default="gpt-4o-mini")
+
+    # Gemini for report narration fallback after OpenAI
+    GEMINI_API_KEY: Optional[str] = Field(default=None)
+    GEMINI_API_BASE: str = Field(default="https://generativelanguage.googleapis.com")
+    GEMINI_MODEL: str = Field(default="gemini-1.5-flash")
+    GEMINI_REPORT_MODEL: str = Field(default="gemini-1.5-pro")
+
+    # Supabase persistence for ChatGPT-style sessions, datasets, agent runs, and reports.
+    SUPABASE_URL: Optional[str] = Field(default=None)
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = Field(default=None)
+    SUPABASE_ANON_KEY: Optional[str] = Field(default=None)
+    SUPABASE_DATASET_BUCKET: str = Field(default="dataverse-datasets")
+    SUPABASE_REPORT_BUCKET: str = Field(default="dataverse-reports")
+    BACKEND_BASE_URL: str = Field(default="http://localhost:8000")
+>>>>>>> 15b8a6d8 (new1)
 
     # DeepSeek for intent parsing (OpenAI-compatible API)
     DEEPSEEK_API_KEY: Optional[str] = Field(default=None, env="DEEPSEEK_API_KEY")
@@ -60,7 +81,14 @@ class Settings(BaseSettings):
     DEEPSEEK_INTENT_MODEL: str = Field(default="deepseek-chat", env="DEEPSEEK_INTENT_MODEL")
 
     # DeepAnalyze / Ollama settings
+<<<<<<< HEAD
     DEEPANALYZE_BASE_URL: str = Field(default="http://localhost:11434", env="DEEPANALYZE_BASE_URL")
+=======
+    DEEPANALYZE_API_KEY: Optional[str] = Field(default=None)
+    DEEPANALYZE_API_BASE: Optional[str] = Field(default=None)
+    DEEPANALYZE_LOCAL_BASE_URL: Optional[str] = Field(default=None)
+    DEEPANALYZE_BASE_URL: str = Field(default="http://localhost:11434")
+>>>>>>> 15b8a6d8 (new1)
     # Preferred logical role/model used for reasoning. This is the primary model name the system will
     # attempt to use, but the system treats this as a logical role and will fall back to other local
     # models if allowed by configuration. This prevents crashes when a specific model artifact is missing.
@@ -72,8 +100,17 @@ class Settings(BaseSettings):
     DEEPANALYZE_ALLOW_FALLBACK: bool = Field(default=True, env="DEEPANALYZE_ALLOW_FALLBACK")
 
     # Security / Limits
+<<<<<<< HEAD
     MAX_UPLOAD_SIZE_MB: int = Field(default=50, env="MAX_UPLOAD_SIZE_MB")
     
+=======
+    MAX_UPLOAD_SIZE_MB: int = Field(default=50)
+    LLM_PROVIDER: str = Field(default="auto")
+    REPORT_NARRATOR_TIMEOUT_SECONDS: int = Field(default=20)
+    AUTO_TRAIN_TARGET_CONFIDENCE: float = Field(default=0.65)
+    MIN_ROWS_FOR_PREDICTION: int = Field(default=30)
+
+>>>>>>> 15b8a6d8 (new1)
     # Authentication
     SECRET_KEY: str = Field(default="your-secret-key-change-in-production", env="SECRET_KEY")
     ALGORITHM: str = Field(default="HS256", env="ALGORITHM")
