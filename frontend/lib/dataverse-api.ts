@@ -2,8 +2,54 @@
  * DataVerse AI API client for the session-based backend.
  */
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_DATAVERSE_API_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000';
+import {
+  API_BASE_URL,
+  API_FALLBACK_HEALTH_URL,
+  API_HEALTH_URL,
+  BACKEND_ENV_HELP,
+  BACKEND_START_COMMAND,
+  buildApiUrl,
+} from './apiConfig';
+
+export { API_BASE_URL, API_HEALTH_URL, BACKEND_START_COMMAND } from './apiConfig';
+
+const WORKSPACE_USER_ID_KEY = 'dataverse.workspaceUserId';
+const USER_HEADER = 'X-Dataverse-User';
+
+function createWorkspaceUserId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (value) => (
+    (Number(value) ^ Math.random() * 16 >> Number(value) / 4).toString(16)
+  ));
+}
+
+function getWorkspaceUserId() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const existing = window.localStorage.getItem(WORKSPACE_USER_ID_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const next = createWorkspaceUserId();
+  window.localStorage.setItem(WORKSPACE_USER_ID_KEY, next);
+  return next;
+}
+
+function withWorkspaceHeaders(init?: RequestInit): RequestInit {
+  const userId = getWorkspaceUserId();
+  if (!userId) {
+    return init ?? {};
+  }
+
+  const headers = new Headers(init?.headers);
+  headers.set(USER_HEADER, userId);
+  return { ...init, headers };
+}
 
 export type ChartPayload = {
   type: 'bar' | 'line' | 'pie' | 'donut' | string;
@@ -142,6 +188,12 @@ export class DataVerseApiError extends Error {
   }
 }
 
+export type BackendHealth = {
+  connected: boolean;
+  url: string;
+  detail?: string;
+};
+
 async function readError(response: Response): Promise<string> {
   try {
     const body = await response.json();
@@ -157,21 +209,57 @@ async function readError(response: Response): Promise<string> {
 
 async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    return await fetch(input, withWorkspaceHeaders(init));
   } catch (error) {
     if (error instanceof DataVerseApiError) {
       throw error;
     }
     const detail = error instanceof Error ? error.message : 'Network request failed';
     throw new DataVerseApiError(
-      `Backend is not reachable at ${API_BASE_URL}. Start the DataVerse backend or check NEXT_PUBLIC_DATAVERSE_API_URL. (${detail})`,
+      [
+        `Backend is not running or not reachable at ${API_BASE_URL}.`,
+        `Start FastAPI on port 8000 with: ${BACKEND_START_COMMAND}`,
+        `${BACKEND_ENV_HELP}`,
+        `Network detail: ${detail}`,
+      ].join(' '),
+      0,
+    );
+  }
+}
+
+export async function checkBackendHealth(): Promise<BackendHealth> {
+  for (const url of [API_HEALTH_URL, API_FALLBACK_HEALTH_URL]) {
+    try {
+      const response = await fetch(url, withWorkspaceHeaders({ cache: 'no-store' }));
+      if (response.ok) {
+        return { connected: true, url };
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Network request failed';
+      return { connected: false, url, detail };
+    }
+  }
+  return { connected: false, url: API_HEALTH_URL, detail: 'Health check returned a non-OK response.' };
+}
+
+export async function ensureBackendAvailable(): Promise<void> {
+  const health = await checkBackendHealth();
+  if (!health.connected) {
+    throw new DataVerseApiError(
+      [
+        `Backend is not running. Start FastAPI on port 8000 or update NEXT_PUBLIC_DATAVERSE_API_URL.`,
+        `Using API URL: ${API_BASE_URL}.`,
+        `Health check: ${health.url}.`,
+        `Command: ${BACKEND_START_COMMAND}`,
+        health.detail ? `Detail: ${health.detail}` : '',
+      ].filter(Boolean).join(' '),
       0,
     );
   }
 }
 
 export async function createSession(title = 'New Chat'): Promise<ChatSessionSummary> {
-  const response = await apiFetch(`${API_BASE_URL}/api/sessions`, {
+  const response = await apiFetch(buildApiUrl('/sessions'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
@@ -184,7 +272,7 @@ export async function createSession(title = 'New Chat'): Promise<ChatSessionSumm
 }
 
 export async function listSessions(): Promise<ChatSessionSummary[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/sessions`);
+  const response = await apiFetch(buildApiUrl('/sessions'));
   if (!response.ok) {
     throw new DataVerseApiError(await readError(response), response.status);
   }
@@ -192,7 +280,7 @@ export async function listSessions(): Promise<ChatSessionSummary[]> {
 }
 
 export async function getSession(sessionId: string): Promise<SessionDetail> {
-  const response = await apiFetch(`${API_BASE_URL}/api/sessions/${sessionId}`);
+  const response = await apiFetch(buildApiUrl(`/sessions/${sessionId}`));
   if (!response.ok) {
     throw new DataVerseApiError(await readError(response), response.status);
   }
@@ -200,7 +288,7 @@ export async function getSession(sessionId: string): Promise<SessionDetail> {
 }
 
 export async function listDatasets(): Promise<RecentDataset[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/datasets`);
+  const response = await apiFetch(buildApiUrl('/datasets'));
   if (!response.ok) {
     throw new DataVerseApiError(await readError(response), response.status);
   }
@@ -212,17 +300,18 @@ export async function uploadDataset(
   sessionId?: string,
   options: { autoAnalyze?: boolean; generateReport?: boolean; runXai?: boolean } = {},
 ): Promise<UploadResponse> {
+  await ensureBackendAvailable();
   const targetSessionId = sessionId || (await createSession()).id;
   const form = new FormData();
   form.append('file', file);
 
   const params = new URLSearchParams({
-    auto_analyze: String(options.autoAnalyze ?? false),
+    auto_analyze: String(options.autoAnalyze ?? true),
     generate_report: String(options.generateReport ?? false),
     run_xai: String(options.runXai ?? false),
   });
 
-  const response = await apiFetch(`${API_BASE_URL}/api/sessions/${targetSessionId}/datasets/upload?${params}`, {
+  const response = await apiFetch(buildApiUrl(`/sessions/${targetSessionId}/datasets/upload?${params}`), {
     method: 'POST',
     body: form,
   });
@@ -256,7 +345,8 @@ export async function uploadDataset(
 }
 
 export async function askDataset(datasetId: string, prompt: string): Promise<AskResponse> {
-  const response = await apiFetch(`${API_BASE_URL}/api/datasets/${datasetId}/ask`, {
+  await ensureBackendAvailable();
+  const response = await apiFetch(buildApiUrl(`/datasets/${datasetId}/ask`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
@@ -270,7 +360,7 @@ export async function askDataset(datasetId: string, prompt: string): Promise<Ask
 }
 
 export async function getProfile(datasetId: string): Promise<ProfileResponse> {
-  const response = await apiFetch(`${API_BASE_URL}/api/datasets/${datasetId}/profile`);
+  const response = await apiFetch(buildApiUrl(`/datasets/${datasetId}/profile`));
 
   if (!response.ok) {
     throw new DataVerseApiError(await readError(response), response.status);
@@ -280,7 +370,7 @@ export async function getProfile(datasetId: string): Promise<ProfileResponse> {
 }
 
 export async function deleteDataset(datasetId: string): Promise<{ dataset_id: string; deleted: boolean }> {
-  const response = await apiFetch(`${API_BASE_URL}/api/datasets/${datasetId}`, {
+  const response = await apiFetch(buildApiUrl(`/datasets/${datasetId}`), {
     method: 'DELETE',
   });
 
@@ -296,7 +386,8 @@ export async function analyzeSession(
   datasetId: string,
   userPrompt = 'Analyze this dataset',
 ): Promise<AnalysisResponse> {
-  const response = await apiFetch(`${API_BASE_URL}/api/sessions/${sessionId}/analyze`, {
+  await ensureBackendAvailable();
+  const response = await apiFetch(buildApiUrl(`/sessions/${sessionId}/analyze`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dataset_id: datasetId, user_prompt: userPrompt, run_xai: true, generate_report: true }),
@@ -310,12 +401,14 @@ export async function analyzeSession(
 export async function streamQuery(
   sessionId: string,
   query: string,
+  datasetId?: string,
   onEvent?: (event: ChatEvent) => void,
 ): Promise<ChatEvent[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/sessions/${sessionId}/messages`, {
+  await ensureBackendAvailable();
+  const response = await apiFetch(buildApiUrl(`/sessions/${sessionId}/messages`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: query }),
+    body: JSON.stringify({ content: query, dataset_id: datasetId }),
   });
   if (!response.ok) {
     throw new DataVerseApiError(await readError(response), response.status);

@@ -42,50 +42,49 @@ Ensure your virtual environment is active, then install the lightweight MVP depe
 Start the FastAPI server from the `dataverse_backend` directory:
 ```powershell
 cd dataverse_backend
-..\.venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 Or run directly from the workspace root directory:
 ```powershell
-.\.venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir dataverse_backend
+python -m uvicorn app.main:app --reload --app-dir dataverse_backend --host 127.0.0.1 --port 8000
 ```
 
 ---
 
 ## API Endpoints
 
-The MVP exposes exactly 6 endpoints:
-- `GET /api/health` — API health check.
-- `POST /api/upload` — Uploads and profiles a dataset.
-- `GET /api/session/{session_id}` — Loads a profiled session.
-- `DELETE /api/session/{session_id}` — Deletes session storage.
-- `POST /api/analyze/upload` — Uploads and immediately runs full reports.
-- `POST /api/analyze/query` — Runs a semantic query against an existing session.
+The frontend uses the session-based API flow:
+- `GET /health/live` - backend liveness check.
+- `GET /api/health` - API health check.
+- `POST /api/sessions` - create a chat session.
+- `POST /api/sessions/{session_id}/datasets/upload?auto_analyze=true` - upload a dataset into the session.
+- `POST /api/sessions/{session_id}/analyze` - run full analysis for a session dataset.
+- `POST /api/sessions/{session_id}/messages` - ask follow-up questions using `content` and `dataset_id`.
+- `GET /api/sessions/{session_id}` - load messages, datasets, agent runs, and reports.
+- `GET /api/datasets` - list recent datasets for the current workspace.
 
 ---
 
 ## Testing with Curl
 
-### 1. Upload a Dataset for Profiling
+### 1. Create a Session
 ```powershell
-curl.exe http://127.0.0.1:8000/api/upload -F "file=@sample_small_dataset.csv"
-```
-
-### 2. Run Full Analysis Upload
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/api/analyze/upload `
-  -F "file=@sample_sales.csv" `
-  -F "target_column=revenue" `
-  -F "task_type=regression" `
-  -F "run_predictions=true" `
-  -F "run_xai=true" `
-  -F "use_llm=false"
-```
-
-### 3. Query an Existing Session
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/api/analyze/query `
+curl.exe -X POST http://localhost:8000/api/sessions `
   -H "Content-Type: application/json" `
-  -d "{\"session_id\":\"YOUR_SESSION_ID\",\"query\":\"What are my top selling products?\",\"target_column\":\"revenue\",\"run_predictions\":true,\"use_llm\":false}"
+  -d "{\"title\":\"New Chat\"}"
+```
+
+### 2. Upload and Auto-Analyze a Dataset
+```powershell
+curl.exe -X POST "http://localhost:8000/api/sessions/YOUR_SESSION_ID/datasets/upload?auto_analyze=true" `
+  -F "file=@sample_sales.csv"
+```
+
+### 3. Ask a Follow-Up Question
+```powershell
+curl.exe -X POST http://localhost:8000/api/sessions/YOUR_SESSION_ID/messages `
+  -H "Content-Type: application/json" `
+  -d "{\"content\":\"examine it\",\"dataset_id\":\"YOUR_DATASET_ID\"}"
 ```
 
 ---

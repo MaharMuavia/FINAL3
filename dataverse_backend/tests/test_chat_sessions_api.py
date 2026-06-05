@@ -81,6 +81,35 @@ def test_session_upload_profiles_only_by_default(tmp_path, monkeypatch):
     assert runs.json() == []
 
 
+def test_recent_sidebar_data_is_scoped_to_workspace_user(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service.supabase, "url", "")
+    monkeypatch.setattr(session_service.supabase, "service_role_key", None)
+    monkeypatch.setattr(session_service, "local", LocalPersistence(tmp_path / "chat_store"))
+
+    client = TestClient(app)
+    user_a = "11111111-1111-4111-8111-111111111111"
+    user_b = "22222222-2222-4222-8222-222222222222"
+
+    session_a = client.post("/api/sessions", json={"title": "User A"}, headers={"X-Dataverse-User": user_a}).json()["session_id"]
+    session_b = client.post("/api/sessions", json={"title": "User B"}, headers={"X-Dataverse-User": user_b}).json()["session_id"]
+    uploaded = client.post(
+        f"/api/sessions/{session_a}/datasets/upload",
+        files={"file": ("user_a.csv", _csv_bytes(), "text/csv")},
+        headers={"X-Dataverse-User": user_a},
+    )
+    assert uploaded.status_code == 200
+
+    sessions_a = client.get("/api/sessions", headers={"X-Dataverse-User": user_a}).json()
+    sessions_b = client.get("/api/sessions", headers={"X-Dataverse-User": user_b}).json()
+    datasets_a = client.get("/api/datasets", headers={"X-Dataverse-User": user_a}).json()
+    datasets_b = client.get("/api/datasets", headers={"X-Dataverse-User": user_b}).json()
+
+    assert [session["id"] for session in sessions_a] == [session_a]
+    assert [session["id"] for session in sessions_b] == [session_b]
+    assert [dataset["session_id"] for dataset in datasets_a] == [session_a]
+    assert datasets_b == []
+
+
 def test_food_dataset_upload_persists_semantic_type(tmp_path, monkeypatch):
     monkeypatch.setattr(session_service.supabase, "url", "")
     monkeypatch.setattr(session_service.supabase, "service_role_key", None)

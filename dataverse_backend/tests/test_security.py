@@ -9,6 +9,27 @@ def test_health_endpoint(client):
     assert data["status"] == "ok"
 
 
+def test_api_health_endpoint(client):
+    """API health endpoint returns 200."""
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+
+
+def test_cors_allows_localhost_frontend(client):
+    """Local Next.js origins should be allowed by CORS."""
+    resp = client.options(
+        "/api/health",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
 def test_invalid_dataset_id_returns_404(client):
     """Non-existent dataset ID returns 404, not 500."""
     resp = client.get("/api/datasets/totally-invalid-uuid/profile")

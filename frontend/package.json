@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:next": "next dev",
-    "test:dev": "node --test scripts/dev.test.mjs",
+    "test:dev": "node --test scripts/dev.test.mjs scripts/api-client.test.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

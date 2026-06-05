@@ -12,13 +12,17 @@ import {
 } from 'lucide-react';
 import {
   API_BASE_URL,
+  API_HEALTH_URL,
+  BACKEND_START_COMMAND,
   analyzeSession,
+  checkBackendHealth,
   createSession,
   getSession,
   listDatasets,
   listSessions,
   streamQuery,
   uploadDataset,
+  DataVerseApiError,
   type ChartPayload,
   type ChatEvent,
   type ChatSessionSummary,
@@ -51,6 +55,8 @@ type ChatMessage = {
 type DatasetSummary = UploadResponse & {
   originalFileSize?: number;
 };
+
+type BackendConnectionStatus = 'checking' | 'connected' | 'disconnected';
 
 const datasetFromRecent = (item: RecentDataset): DatasetSummary => {
   const columns = Array.isArray(item.columns)
@@ -137,6 +143,43 @@ const datasetSuggestions = (dataset: DatasetSummary | null) => {
   }
   return ['Summarize this dataset.', 'Which columns have missing values?', 'Show unique values by column.', 'Find important patterns.'];
 };
+
+const connectionStatusLabel = (
+  status: BackendConnectionStatus,
+  dataset: DatasetSummary | null,
+  isAnalyzing = false,
+) => {
+  if (isAnalyzing) return 'Analyzing';
+  if (!dataset) return status === 'connected' ? 'Connected' : status === 'checking' ? 'Checking backend' : 'Backend disconnected';
+  if (!dataset.dataset_id) return 'Uploaded locally';
+  if (status === 'connected') return dataset.analysis ? 'Analysis complete' : 'Uploaded to backend';
+  if (status === 'checking') return 'Checking backend';
+  return 'Backend disconnected';
+};
+
+const connectionStatusClasses = (status: BackendConnectionStatus, dataset: DatasetSummary | null, isAnalyzing = false) => {
+  const label = connectionStatusLabel(status, dataset, isAnalyzing);
+  if (label === 'Analysis complete' || label === 'Uploaded to backend' || label === 'Connected') {
+    return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
+  }
+  if (label === 'Analyzing' || label === 'Checking backend') {
+    return 'bg-blue-500/10 border-blue-500/30 text-blue-300';
+  }
+  if (label === 'Uploaded locally') {
+    return 'bg-amber-500/10 border-amber-500/30 text-amber-300';
+  }
+  return 'bg-rose-500/10 border-rose-500/30 text-rose-300';
+};
+
+const backendUnavailableMessage = () => (
+  `Backend is not running. Start FastAPI on port 8000 or update NEXT_PUBLIC_DATAVERSE_API_URL. Using API URL: ${API_BASE_URL}. Command: ${BACKEND_START_COMMAND}`
+);
+
+const isBackendConnectionError = (error: unknown) => (
+  error instanceof DataVerseApiError
+    ? error.status === 0
+    : error instanceof Error && error.message.toLowerCase().includes('backend is not running')
+);
 
 // --- Components ---
 
@@ -991,17 +1034,20 @@ const SignInView = ({ onComplete, onSwitchToSignUp, onGuest }: { onComplete: () 
 const HomeView = ({
   dataset,
   uploadStatus,
+  backendStatus,
   onUpload,
   onSubmit,
   onRunFullAnalysis,
 }: {
   dataset: DatasetSummary | null;
   uploadStatus: string | null;
+  backendStatus: BackendConnectionStatus;
   onUpload: (file: File) => void;
   onSubmit: (query: string) => void;
   onRunFullAnalysis: () => void;
 }) => {
   const isUploading = uploadStatus?.toLowerCase().includes('upload') || uploadStatus?.toLowerCase().includes('parsing') || uploadStatus?.toLowerCase().includes('profiling');
+  const statusLabel = connectionStatusLabel(backendStatus, dataset, isUploading);
   return (
     <div className="flex-1 w-full h-full flex flex-col relative overflow-hidden items-center justify-center">
       {/* Background elements */}
@@ -1028,17 +1074,20 @@ const HomeView = ({
                   {dataset?.dataset_filename || 'Upload a CSV or Excel file'}
                 </h3>
                 <p className="text-xs text-[#cbc3d7] mt-1">
-                  {uploadStatus || (dataset ? `${formatNumber(dataset.dataset_rows)} rows, ${formatNumber(dataset.dataset_cols)} columns connected to ${API_BASE_URL}` : `Backend target: ${API_BASE_URL}`)}
+                  {uploadStatus || (dataset ? `${formatNumber(dataset.dataset_rows)} rows, ${formatNumber(dataset.dataset_cols)} columns via ${API_BASE_URL}` : `Backend target: ${API_BASE_URL}`)}
                 </p>
                 {dataset && (
                   <p className="text-[11px] text-blue-300 mt-1">Detected type: {datasetTypeLabel(dataset)}</p>
                 )}
+                <p className="text-[11px] text-[#cbc3d7]/70 mt-1" title={`Health check: ${API_HEALTH_URL}`}>
+                  Backend status: {backendStatus === 'connected' ? 'Connected' : backendStatus === 'checking' ? 'Checking' : 'Disconnected'}
+                </p>
               </div>
             </div>
             {dataset && (
               <div className="flex flex-col sm:flex-row gap-2 self-start md:self-auto">
-                <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded text-xs text-emerald-300 flex items-center gap-2 font-medium">
-                  <CheckCircle2 size={14} /> Ready
+                <span className={`px-3 py-1 border rounded text-xs flex items-center gap-2 font-medium ${connectionStatusClasses(backendStatus, dataset, isUploading)}`}>
+                  {backendStatus === 'disconnected' ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />} {statusLabel}
                 </span>
                 <button
                   type="button"
@@ -1068,6 +1117,7 @@ const ChatView = ({
   dataset,
   messages,
   isQuerying,
+  backendStatus,
   onUpload,
   onSubmit,
   onRunFullAnalysis,
@@ -1075,6 +1125,7 @@ const ChatView = ({
   dataset: DatasetSummary | null;
   messages: ChatMessage[];
   isQuerying: boolean;
+  backendStatus: BackendConnectionStatus;
   onUpload: (file: File) => void;
   onSubmit: (query: string) => void;
   onRunFullAnalysis: () => void;
@@ -1110,7 +1161,12 @@ const ChatView = ({
                   </div>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <span className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded">Connected</span>
+                  <span
+                    className={`text-xs border px-2.5 py-1 rounded ${connectionStatusClasses(backendStatus, dataset, isQuerying)}`}
+                    title={`Health check: ${API_HEALTH_URL}`}
+                  >
+                    {connectionStatusLabel(backendStatus, dataset, isQuerying)}
+                  </span>
                   <button
                     type="button"
                     onClick={onRunFullAnalysis}
@@ -1319,7 +1375,7 @@ const DataHubView = ({
                 <CloudUpload size={20} className="text-amber-400 shrink-0 mt-0.5" />
                 <div>
                   <h2 className="text-base font-semibold text-white">Connect your backend data flow</h2>
-                  <p className="text-sm text-[#cbc3d7] mt-1">Upload a CSV or Excel file. The frontend will send it to <span className="font-mono text-violet-300">{API_BASE_URL}/api/upload</span>.</p>
+                  <p className="text-sm text-[#cbc3d7] mt-1">Upload a CSV or Excel file. The frontend will send it through <span className="font-mono text-violet-300">{API_BASE_URL}/sessions/&lt;session_id&gt;/datasets/upload</span>.</p>
                 </div>
               </div>
               <label className="bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:brightness-110 active:scale-95 transition-all cursor-pointer text-center">
@@ -1346,7 +1402,7 @@ const DataHubView = ({
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-white">{dataset?.dataset_filename || 'Waiting for dataset'}</h2>
-                  <p className="text-xs text-[#cbc3d7] mt-1">{dataset ? `${dataset.message} | ${datasetTypeLabel(dataset)} | Ready for analysis` : 'Upload from the chat bar or dashboard prompt'}</p>
+                  <p className="text-xs text-[#cbc3d7] mt-1">{dataset ? `${dataset.message} | ${datasetTypeLabel(dataset)} | ${dataset.dataset_id ? 'Uploaded to backend' : 'Uploaded locally'}` : 'Upload from the chat bar or dashboard prompt'}</p>
                 </div>
               </div>
 
@@ -1581,6 +1637,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isQuerying, setIsQuerying] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [backendStatus, setBackendStatus] = useState<BackendConnectionStatus>('checking');
   const activeRequestRef = useRef(0);
 
   const nextRequestToken = () => {
@@ -1589,6 +1646,13 @@ export default function App() {
   };
 
   const isStaleRequest = (token: number) => token !== activeRequestRef.current;
+
+  const refreshBackendStatus = async () => {
+    setBackendStatus('checking');
+    const health = await checkBackendHealth();
+    setBackendStatus(health.connected ? 'connected' : 'disconnected');
+    return health.connected;
+  };
 
   const refreshSidebar = async () => {
     try {
@@ -1602,6 +1666,13 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    checkBackendHealth()
+      .then((health) => {
+        if (!cancelled) setBackendStatus(health.connected ? 'connected' : 'disconnected');
+      })
+      .catch(() => {
+        if (!cancelled) setBackendStatus('disconnected');
+      });
     Promise.all([listSessions(), listDatasets()])
       .then(([nextSessions, nextDatasets]) => {
         if (!cancelled) {
@@ -1626,6 +1697,7 @@ export default function App() {
     setCurrentSessionId(null);
     setCurrentView('home');
     try {
+      await refreshBackendStatus();
       const session = await createSession();
       if (isStaleRequest(token)) return;
       setCurrentSessionId(session.id);
@@ -1666,15 +1738,19 @@ export default function App() {
     const token = nextRequestToken();
     setUploadStatus(`Uploading file: ${file.name}...`);
     try {
+      const backendReady = await refreshBackendStatus();
+      if (!backendReady) {
+        throw new Error(backendUnavailableMessage());
+      }
       const sessionId = currentSessionId || (await createSession()).id;
       if (isStaleRequest(token)) return;
       setCurrentSessionId(sessionId);
       setUploadStatus(`Parsing dataset and profiling columns: ${file.name}...`);
-      const uploaded = await uploadDataset(file, sessionId, { autoAnalyze: false, generateReport: false, runXai: false });
+      const uploaded = await uploadDataset(file, sessionId, { autoAnalyze: true, generateReport: false, runXai: false });
       if (isStaleRequest(token)) return;
       const nextDataset = { ...uploaded, originalFileSize: file.size };
       setDataset(nextDataset);
-      setUploadStatus(`Ready for analysis: ${file.name}`);
+      setUploadStatus(uploaded.analysis ? `Analysis complete: ${file.name}` : `Uploaded to backend: ${file.name}`);
       const systemMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'system',
@@ -1706,6 +1782,7 @@ export default function App() {
       await refreshSidebar();
     } catch (error) {
       if (isStaleRequest(token)) return;
+      if (isBackendConnectionError(error)) setBackendStatus('disconnected');
       const message = error instanceof Error ? error.message : 'Upload failed';
       setUploadStatus(message);
       setMessages((current) => [
@@ -1738,6 +1815,10 @@ export default function App() {
       },
     ]);
     try {
+      const backendReady = await refreshBackendStatus();
+      if (!backendReady) {
+        throw new Error(backendUnavailableMessage());
+      }
       const result = await analyzeSession(sessionId, datasetId, query);
       if (isStaleRequest(token)) return;
       setMessages((current) => current.map((message) => (
@@ -1763,6 +1844,7 @@ export default function App() {
       await refreshSidebar();
     } catch (error) {
       if (isStaleRequest(token)) return;
+      if (isBackendConnectionError(error)) setBackendStatus('disconnected');
       const message = error instanceof Error ? error.message : 'Analysis failed';
       setMessages((current) => current.map((item) => (
         item.id === assistantId
@@ -1806,7 +1888,11 @@ export default function App() {
     ]);
 
     try {
-      const events = await streamQuery(sessionId, query, (event) => {
+      const backendReady = await refreshBackendStatus();
+      if (!backendReady) {
+        throw new Error(backendUnavailableMessage());
+      }
+      const events = await streamQuery(sessionId, query, dataset.dataset_id, (event) => {
         if (isStaleRequest(token)) return;
         setMessages((current) => current.map((message) => {
           if (message.id !== assistantId) {
@@ -1859,6 +1945,7 @@ export default function App() {
       await refreshSidebar();
     } catch (error) {
       if (isStaleRequest(token)) return;
+      if (isBackendConnectionError(error)) setBackendStatus('disconnected');
       const message = error instanceof Error ? error.message : 'Analysis failed';
       setMessages((current) => current.map((item) => (
         item.id === assistantId
@@ -2038,8 +2125,8 @@ export default function App() {
             transition={{ duration: 0.2 }}
             className="w-full h-full flex flex-col"
           >
-            {currentView === 'home' && <HomeView dataset={dataset} uploadStatus={uploadStatus} onUpload={handleUpload} onSubmit={handleSubmit} onRunFullAnalysis={handleRunFullAnalysis} />}
-            {currentView === 'chat' && <ChatView dataset={dataset} messages={messages} isQuerying={isQuerying} onUpload={handleUpload} onSubmit={handleSubmit} onRunFullAnalysis={handleRunFullAnalysis} />}
+            {currentView === 'home' && <HomeView dataset={dataset} uploadStatus={uploadStatus} backendStatus={backendStatus} onUpload={handleUpload} onSubmit={handleSubmit} onRunFullAnalysis={handleRunFullAnalysis} />}
+            {currentView === 'chat' && <ChatView dataset={dataset} messages={messages} isQuerying={isQuerying} backendStatus={backendStatus} onUpload={handleUpload} onSubmit={handleSubmit} onRunFullAnalysis={handleRunFullAnalysis} />}
             {currentView === 'data' && <DataHubView dataset={dataset} messages={messages} onUpload={handleUpload} onSubmit={handleSubmit} />}
           </motion.div>
         </AnimatePresence>

@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const DEFAULT_API_URL = 'http://127.0.0.1:8000';
+const DEFAULT_API_URL = 'http://localhost:8000/api';
 const DEFAULT_FRONTEND_HOST = '127.0.0.1';
 const DEFAULT_FRONTEND_PORT = '3000';
 const STARTUP_TIMEOUT_MS = 120_000;
@@ -32,6 +32,20 @@ function parseBackendTarget(apiUrl) {
   };
 }
 
+function healthUrlFor(apiUrl) {
+  return new URL('/health/live', apiUrl).toString();
+}
+
+function apiOriginFor(apiUrl) {
+  const parsed = new URL(apiUrl);
+  if (parsed.pathname.replace(/\/+$/, '') === '/api') {
+    parsed.pathname = '/';
+    parsed.search = '';
+    parsed.hash = '';
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
 export function createDevPlan({
   frontendDir = defaultFrontendDir,
   env = process.env,
@@ -40,11 +54,14 @@ export function createDevPlan({
 } = {}) {
   const repoRoot = path.resolve(frontendDir, '..');
   const apiUrl = normalizeUrl(env.NEXT_PUBLIC_DATAVERSE_API_URL);
+  const apiOrigin = apiOriginFor(apiUrl);
   const nextBin = path.join(frontendDir, 'node_modules', 'next', 'dist', 'bin', 'next');
 
   return {
     apiUrl,
-    backendTarget: parseBackendTarget(apiUrl),
+    apiOrigin,
+    healthUrl: healthUrlFor(apiOrigin),
+    backendTarget: parseBackendTarget(apiOrigin),
     backend: {
       command: resolvePython(repoRoot, platform),
       args: [
@@ -99,6 +116,23 @@ async function waitForPort(host, port, timeoutMs) {
   while (Date.now() - startedAt < timeoutMs) {
     if (await isPortOpen(host, port)) {
       return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return false;
+}
+
+export async function waitForBackendHealth(apiUrl, timeoutMs, fetchImpl = fetch) {
+  const healthUrl = healthUrlFor(apiUrl);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetchImpl(healthUrl, { cache: 'no-store' });
+      if (response.ok) {
+        return true;
+      }
+    } catch {
+      // Backend process may still be importing modules.
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
@@ -196,18 +230,20 @@ async function main() {
 
   if (backendAlreadyRunning) {
     console.log(`[dev] Reusing existing backend on ${plan.apiUrl}`);
+    const backendHealthy = await waitForBackendHealth(plan.apiUrl, 10_000);
+    if (!backendHealthy) {
+      console.error(`[dev] Port ${plan.backendTarget.port} is open, but ${plan.healthUrl} is not healthy.`);
+      console.error('[dev] Stop the process on that port or run without DATAVERSE_REUSE_BACKEND so the launcher can start DataVerse backend.');
+      process.exit(1);
+    }
   } else {
     console.log('[dev] Starting FastAPI backend on http://127.0.0.1:8000');
     backendProcess = startProcess('backend', plan.backend, env);
 
-    const backendReady = await waitForPort(
-      plan.backendTarget.host,
-      plan.backendTarget.port,
-      STARTUP_TIMEOUT_MS,
-    );
+    const backendReady = await waitForBackendHealth(plan.apiUrl, STARTUP_TIMEOUT_MS);
 
     if (!backendReady) {
-      console.error('[dev] Backend did not become reachable within 120 seconds.');
+      console.error(`[dev] Backend did not pass health check at ${plan.healthUrl} within 120 seconds.`);
       if (backendProcess) {
         backendProcess.kill('SIGTERM');
       }

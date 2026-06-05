@@ -46,11 +46,17 @@ class SessionService:
         row = await self._insert("chat_sessions", payload)
         return {"session_id": row["id"], "id": row["id"], "title": row["title"], "created_at": row["created_at"]}
 
-    async def list_sessions(self) -> list[dict[str, Any]]:
+    async def list_sessions(self, user_id: str | None = None) -> list[dict[str, Any]]:
         if self.supabase.configured:
-            rows = await self.supabase.select("chat_sessions", "select=*&order=updated_at.desc&limit=50")
+            query = "select=*&order=updated_at.desc&limit=50"
+            if user_id:
+                query = f"select=*&user_id=eq.{quote(user_id)}&order=updated_at.desc&limit=50"
+            rows = await self.supabase.select("chat_sessions", query)
         else:
-            rows = sorted(self.local.read_table("chat_sessions"), key=lambda item: item.get("updated_at") or "", reverse=True)[:50]
+            local_rows = self.local.read_table("chat_sessions")
+            if user_id:
+                local_rows = [row for row in local_rows if str(row.get("user_id")) == str(user_id)]
+            rows = sorted(local_rows, key=lambda item: item.get("updated_at") or "", reverse=True)[:50]
         messages = await self._all_rows("chat_messages")
         counts: dict[str, int] = {}
         for message in messages:
@@ -113,7 +119,8 @@ class SessionService:
         return message
 
     async def upload_dataset(self, session_id: str, filename: str, content: bytes) -> dict[str, Any]:
-        if not await self._get_by_id("chat_sessions", session_id):
+        session = await self._get_by_id("chat_sessions", session_id)
+        if not session:
             raise KeyError("Session not found")
         df = parse_uploaded_dataframe(filename, content)
         dataset_id = str(uuid.uuid4())
@@ -141,7 +148,7 @@ class SessionService:
         dataset = {
             "id": dataset_id,
             "session_id": session_id,
-            "user_id": None,
+            "user_id": session.get("user_id"),
             "filename": safe_name,
             "original_filename": safe_name,
             "storage_path": persisted_path,
@@ -166,11 +173,17 @@ class SessionService:
         )
         return dataset
 
-    async def list_datasets(self) -> list[dict[str, Any]]:
+    async def list_datasets(self, user_id: str | None = None) -> list[dict[str, Any]]:
         if self.supabase.configured:
-            rows = await self.supabase.select("datasets", "select=*&order=created_at.desc&limit=50")
+            query = "select=*&order=created_at.desc&limit=50"
+            if user_id:
+                query = f"select=*&user_id=eq.{quote(user_id)}&order=created_at.desc&limit=50"
+            rows = await self.supabase.select("datasets", query)
         else:
-            rows = sorted(self.local.read_table("datasets"), key=lambda item: item.get("created_at") or "", reverse=True)[:50]
+            local_rows = self.local.read_table("datasets")
+            if user_id:
+                local_rows = [row for row in local_rows if str(row.get("user_id")) == str(user_id)]
+            rows = sorted(local_rows, key=lambda item: item.get("created_at") or "", reverse=True)[:50]
         return rows
 
     async def list_session_datasets(self, session_id: str) -> list[dict[str, Any]]:

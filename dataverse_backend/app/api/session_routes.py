@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
 
 from ..api.schemas import ChatMessageCreate, ChatSessionCreate, ChatSessionUpdate, SessionAnalyzeRequest
 from ..core.config import settings
@@ -14,13 +14,18 @@ router = APIRouter()
 
 
 @router.post("/sessions")
-async def create_session(request: ChatSessionCreate) -> dict[str, Any]:
-    return await session_service.create_session(title=request.title)
+async def create_session(
+    request: ChatSessionCreate,
+    dataverse_user: str | None = Header(default=None, alias="X-Dataverse-User"),
+) -> dict[str, Any]:
+    return await session_service.create_session(title=request.title, user_id=dataverse_user)
 
 
 @router.get("/sessions")
-async def list_sessions() -> list[dict[str, Any]]:
-    return await session_service.list_sessions()
+async def list_sessions(
+    dataverse_user: str | None = Header(default=None, alias="X-Dataverse-User"),
+) -> list[dict[str, Any]]:
+    return await session_service.list_sessions(user_id=dataverse_user)
 
 
 @router.get("/sessions/{session_id}")

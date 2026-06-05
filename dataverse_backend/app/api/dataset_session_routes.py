@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 
 from ..api.schemas import AskRequest
 from ..core.config import settings
@@ -14,7 +14,10 @@ router = APIRouter()
 
 
 @router.post("/datasets/upload")
-async def upload_dataset_compat(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_dataset_compat(
+    file: UploadFile = File(...),
+    dataverse_user: str | None = Header(default=None, alias="X-Dataverse-User"),
+) -> dict[str, Any]:
     contents = await file.read()
     filename = file.filename or "dataset.csv"
     if not contents:
@@ -24,7 +27,7 @@ async def upload_dataset_compat(file: UploadFile = File(...)) -> dict[str, Any]:
     if not filename.lower().endswith((".csv", ".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only CSV and Excel files are supported")
 
-    session = await session_service.create_session(title=f"Dataset: {filename}")
+    session = await session_service.create_session(title=f"Dataset: {filename}", user_id=dataverse_user)
     dataset = await session_service.upload_dataset(session["id"], filename, contents)
     column_names = [
         str(column.get("name", ""))
@@ -44,8 +47,10 @@ async def upload_dataset_compat(file: UploadFile = File(...)) -> dict[str, Any]:
 
 
 @router.get("/datasets")
-async def list_recent_datasets() -> list[dict[str, Any]]:
-    return await session_service.list_datasets()
+async def list_recent_datasets(
+    dataverse_user: str | None = Header(default=None, alias="X-Dataverse-User"),
+) -> list[dict[str, Any]]:
+    return await session_service.list_datasets(user_id=dataverse_user)
 
 
 @router.get("/datasets/{dataset_id}")
