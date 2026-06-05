@@ -1,0 +1,11 @@
+date,product,category,quantity,revenue,cost
+2026-05-01,Product A,Electronics,5,500,300
+2026-05-02,Product B,,10,200,100
+2026-05-03,Product C,Electronics,,300,150
+2026-05-04,Product A,Electronics,8,800,
+2026-05-05,Product D,Home,4,160,80
+2026-05-06,Product B,Clothing,6,,60
+2026-05-07,Product E,Home,3,150,90
+2026-05-08,Product C,Electronics,4,600,300
+2026-05-09,Product A,Electronics,7,700,420
+2026-05-10,Product F,Clothing,12,360,180

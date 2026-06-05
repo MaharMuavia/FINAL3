@@ -33,11 +33,25 @@ class ReportNarrator:
                 timeout=settings.REPORT_NARRATOR_TIMEOUT_SECONDS,
             )
             if text:
-                fallback["executive_summary"] = text.strip()
+                fallback["executive_summary"] = self._preserve_required_facts(text.strip(), facts, fallback)
                 fallback["narration_provider"] = getattr(llm_provider, "last_provider", "llm")
         except Exception:
             pass
         return fallback
+
+    def _preserve_required_facts(self, text: str, facts: dict[str, Any], fallback: dict[str, Any]) -> str:
+        business_summary = facts.get("business_summary") or {}
+        if not business_summary:
+            return text
+        required = (
+            f"Business summary: sales Rs {business_summary.get('total_sales', 0)}, "
+            f"expenses Rs {business_summary.get('total_expenses', 0)}, "
+            f"udhaar Rs {business_summary.get('udhaar_outstanding', 0)}, "
+            f"net profit Rs {business_summary.get('net_profit', 0)}."
+        )
+        if f"sales Rs {business_summary.get('total_sales', 0)}" in text:
+            return text
+        return f"{text}\n\n{required or fallback.get('executive_summary', '')}".strip()
 
     def _prompt(self, facts: dict[str, Any]) -> str:
         safe = {

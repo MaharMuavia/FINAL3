@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from ..api.schemas import ChatMessageCreate, ChatSessionCreate, ChatSessionUpdate, SessionAnalyzeRequest
 from ..core.config import settings
@@ -47,7 +47,13 @@ async def delete_session(session_id: str) -> dict[str, Any]:
 
 
 @router.post("/sessions/{session_id}/datasets/upload")
-async def upload_dataset_to_session(session_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_dataset_to_session(
+    session_id: str,
+    file: UploadFile = File(...),
+    auto_analyze: bool = Query(default=True),
+    generate_report: bool = Query(default=True),
+    run_xai: bool = Query(default=True),
+) -> dict[str, Any]:
     contents = await file.read()
     filename = file.filename or "dataset.csv"
     if not contents:
@@ -58,6 +64,15 @@ async def upload_dataset_to_session(session_id: str, file: UploadFile = File(...
         raise HTTPException(status_code=400, detail="Only CSV and Excel files are supported")
     try:
         dataset = await session_service.upload_dataset(session_id, filename, contents)
+        analysis = None
+        if auto_analyze:
+            analysis = await session_service.analyze(
+                session_id,
+                dataset_id=dataset["id"],
+                user_prompt="Analyze this dataset",
+                run_xai=run_xai,
+                generate_report=generate_report,
+            )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -71,6 +86,7 @@ async def upload_dataset_to_session(session_id: str, file: UploadFile = File(...
         "columns": dataset["columns"],
         "status": dataset["status"],
         "dataset": dataset,
+        "analysis": analysis,
     }
 
 

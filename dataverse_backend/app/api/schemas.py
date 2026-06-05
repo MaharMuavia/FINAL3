@@ -1,7 +1,7 @@
 """Pydantic schemas for DataVerse AI API."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -43,11 +43,9 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-<<<<<<< HEAD
-    service: str
-    version: str
-=======
-    details: Optional[Dict[str, Any]] = None
+    service: str | None = None
+    version: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class AnalyzeUploadResponse(BaseModel):
@@ -82,7 +80,7 @@ class AnalyzeQueryRequest(BaseModel):
     task_type: Optional[str] = None
     run_predictions: Optional[bool] = None
     run_xai: Optional[bool] = None
-    use_llm: bool = True
+    use_llm: bool = False
     provider: Optional[str] = None
 
 
@@ -183,4 +181,3 @@ class GraphExecuteResponse(BaseModel):
     ml_results: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     iteration_count: int = 0
->>>>>>> 15b8a6d8 (new1)

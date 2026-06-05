@@ -11,6 +11,9 @@ from .modeling import TrainedModelBundle
 def explain_model(bundle: TrainedModelBundle | None, prediction: dict[str, Any], run_xai: bool = True) -> dict[str, Any]:
     fallback_importance = prediction.get("feature_importance", []) if prediction else []
     if bundle is None or prediction.get("status") != "complete":
+        reason = str(prediction.get("reason") or "No trained model was available for XAI.")
+        if prediction.get("status") == "skipped":
+            return _fallback(fallback_importance, [reason], reason=reason)
         return _fallback(fallback_importance, ["No trained model was available for XAI."])
     if not run_xai:
         return _fallback(fallback_importance, ["run_xai=false"])
@@ -66,8 +69,11 @@ def explain_model(bundle: TrainedModelBundle | None, prediction: dict[str, Any],
     }
 
 
-def _fallback(importance: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
+def _fallback(importance: list[dict[str, Any]], warnings: list[str], reason: str | None = None) -> dict[str, Any]:
     top_features = [item["feature"] for item in importance[:5]]
+    skipped_message = "Explainability was skipped because no trained model was available."
+    if reason:
+        skipped_message = f"Prediction and XAI were skipped. {reason}"
     return {
         "status": "fallback" if importance else "skipped",
         "method": "feature_importance_fallback" if importance else None,
@@ -78,7 +84,7 @@ def _fallback(importance: list[dict[str, Any]], warnings: list[str]) -> dict[str
             "Feature importance is used as the explanation fallback. Top drivers: "
             + ", ".join(top_features)
             if top_features
-            else "Explainability was skipped because no trained model was available."
+            else skipped_message
         ),
         "warnings": warnings,
     }

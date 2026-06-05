@@ -4,6 +4,10 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'DataVerse AI',
   description: 'Proactive AI Data Platform',
+  icons: {
+    icon: '/icon.svg',
+    shortcut: '/icon.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

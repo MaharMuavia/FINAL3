@@ -28,7 +28,7 @@ def test_session_upload_analysis_report_local_fallback(tmp_path, monkeypatch):
     session_id = created.json()["session_id"]
 
     uploaded = client.post(
-        f"/api/sessions/{session_id}/datasets/upload",
+        f"/api/sessions/{session_id}/datasets/upload?auto_analyze=false",
         files={"file": ("may_sales.csv", _csv_bytes(), "text/csv")},
     )
     assert uploaded.status_code == 200
@@ -52,3 +52,69 @@ def test_session_upload_analysis_report_local_fallback(tmp_path, monkeypatch):
     runs = client.get(f"/api/sessions/{session_id}/agent-runs")
     assert runs.status_code == 200
     assert [run["agent_name"] for run in runs.json()] == ["AnalysisAgent", "XAIReportAgent"]
+    assert all(run["output"].get("steps") for run in runs.json())
+
+
+def test_session_upload_auto_analyzes_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service.supabase, "url", "")
+    monkeypatch.setattr(session_service.supabase, "service_role_key", None)
+    monkeypatch.setattr(session_service, "local", LocalPersistence(tmp_path / "chat_store"))
+
+    client = TestClient(app)
+    session_id = client.post("/api/sessions", json={"title": "New Chat"}).json()["session_id"]
+    uploaded = client.post(
+        f"/api/sessions/{session_id}/datasets/upload",
+        files={"file": ("small_sales.csv", _csv_bytes(), "text/csv")},
+    )
+
+    assert uploaded.status_code == 200
+    body = uploaded.json()
+    assert body["analysis"]["dataset_id"] == body["dataset_id"]
+    assert [agent["name"] for agent in body["analysis"]["agents"]] == ["AnalysisAgent", "XAIReportAgent"]
+    assert all(agent["steps"] for agent in body["analysis"]["agents"])
+
+    runs = client.get(f"/api/sessions/{session_id}/agent-runs")
+    assert [run["agent_name"] for run in runs.json()] == ["AnalysisAgent", "XAIReportAgent"]
+
+
+def test_multiple_datasets_in_same_session_do_not_overwrite(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service.supabase, "url", "")
+    monkeypatch.setattr(session_service.supabase, "service_role_key", None)
+    monkeypatch.setattr(session_service, "local", LocalPersistence(tmp_path / "chat_store"))
+
+    client = TestClient(app)
+    session_id = client.post("/api/sessions", json={"title": "New Chat"}).json()["session_id"]
+    first = client.post(
+        f"/api/sessions/{session_id}/datasets/upload?auto_analyze=false",
+        files={"file": ("first.csv", b"date,product,revenue\n2026-05-01,A,100\n", "text/csv")},
+    ).json()
+    second = client.post(
+        f"/api/sessions/{session_id}/datasets/upload?auto_analyze=false",
+        files={"file": ("second.csv", b"date,product,revenue\n2026-05-01,B,900\n2026-05-02,C,100\n", "text/csv")},
+    ).json()
+
+    first_analysis = client.post(
+        f"/api/sessions/{session_id}/analyze",
+        json={"dataset_id": first["dataset_id"], "user_prompt": "Summarize first", "run_xai": True, "generate_report": False},
+    )
+    second_analysis = client.post(
+        f"/api/sessions/{session_id}/analyze",
+        json={"dataset_id": second["dataset_id"], "user_prompt": "Summarize second", "run_xai": True, "generate_report": False},
+    )
+
+    assert first_analysis.status_code == 200
+    assert second_analysis.status_code == 200
+    assert first_analysis.json()["tables"][0]["rows"][0]["value"] == 1
+    assert second_analysis.json()["tables"][0]["rows"][0]["value"] == 2
+
+
+def test_storage_status_local_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service.supabase, "url", "")
+    monkeypatch.setattr(session_service.supabase, "service_role_key", None)
+    monkeypatch.setattr(session_service, "local", LocalPersistence(tmp_path / "chat_store"))
+
+    client = TestClient(app)
+    response = client.get("/api/storage/status")
+    assert response.status_code == 200
+    assert response.json()["mode"] == "local"
+    assert response.json()["supabase_configured"] is False

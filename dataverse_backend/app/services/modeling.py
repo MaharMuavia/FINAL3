@@ -82,8 +82,12 @@ def train_prediction(
     if run_predictions and len(df) < min_rows:
         return {
             "status": "skipped",
-            "reason": f"Dataset has fewer than {min_rows} rows, so prediction was skipped because reliable ML is not appropriate.",
-            "limitations": [f"minimum rows >= {min_rows}"],
+            "reason": (
+                f"Prediction and XAI were skipped because the dataset has only {len(df)} rows. "
+                f"This is fewer than {min_rows} rows, the minimum required for basic ML."
+            ),
+            "limitations": [f"minimum rows >= {min_rows}", f"actual rows = {len(df)}"],
+            "upload_requirements": {"minimum_rows": min_rows, "actual_rows": int(len(df))},
         }, None, suggestions
     target = infer_target_column(df, query=query, selected_target=target_column)
     if not should_train_prediction(query, target, target_column, run_predictions):

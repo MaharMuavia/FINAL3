@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -127,6 +127,46 @@ export function isMainModule(moduleUrl, argvPath) {
   return Boolean(argvPath) && moduleUrl === pathToFileURL(argvPath).href;
 }
 
+function killPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const output = execSync('netstat -ano').toString();
+      const lines = output.split('\n');
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 5 && parts[1].includes(`:${port}`)) {
+          const pid = parts[parts.length - 1];
+          if (pid && pid !== '0') {
+            console.log(`[dev] Stopping existing process (PID ${pid}) on port ${port}...`);
+            execSync(`taskkill /F /PID ${pid}`);
+            return true;
+          }
+        }
+      }
+    } else {
+      try {
+        const pid = execSync(`lsof -t -i:${port}`).toString().trim();
+        if (pid) {
+          console.log(`[dev] Stopping existing process (PID ${pid}) on port ${port}...`);
+          execSync(`kill -9 ${pid}`);
+          return true;
+        }
+      } catch (e) {
+        // Fallback for systems without lsof
+        const pid = execSync(`fuser ${port}/tcp 2>/dev/null`).toString().trim();
+        if (pid) {
+          console.log(`[dev] Stopping existing process (PID ${pid}) on port ${port}...`);
+          execSync(`kill -9 ${pid}`);
+          return true;
+        }
+      }
+    }
+  } catch (error) {
+    // Ignore error
+  }
+  return false;
+}
+
 export function shouldReuseBackend(env = process.env) {
   const value = String(env.DATAVERSE_REUSE_BACKEND || '').toLowerCase();
   return value === '1' || value === 'true';
@@ -142,14 +182,19 @@ async function main() {
   console.log(`[dev] Frontend API URL: ${plan.apiUrl}`);
 
   let backendProcess;
-  const backendAlreadyRunning = await isPortOpen(plan.backendTarget.host, plan.backendTarget.port);
-  if (backendAlreadyRunning) {
-    if (!shouldReuseBackend(process.env)) {
-      console.error(`[dev] Backend port ${plan.backendTarget.port} is already in use.`);
-      console.error('[dev] Stop the existing backend so npm run dev can start a fresh reload-enabled backend.');
-      console.error('[dev] To intentionally reuse an existing backend, set DATAVERSE_REUSE_BACKEND=1.');
-      process.exit(1);
+  let backendAlreadyRunning = await isPortOpen(plan.backendTarget.host, plan.backendTarget.port);
+  
+  if (backendAlreadyRunning && !shouldReuseBackend(process.env)) {
+    console.log(`[dev] Port ${plan.backendTarget.port} is already in use. Terminating existing process to connect fresh backend...`);
+    const killed = killPort(plan.backendTarget.port);
+    if (killed) {
+      // Wait for port release
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      backendAlreadyRunning = await isPortOpen(plan.backendTarget.host, plan.backendTarget.port);
     }
+  }
+
+  if (backendAlreadyRunning) {
     console.log(`[dev] Reusing existing backend on ${plan.apiUrl}`);
   } else {
     console.log('[dev] Starting FastAPI backend on http://127.0.0.1:8000');
@@ -163,12 +208,25 @@ async function main() {
 
     if (!backendReady) {
       console.error('[dev] Backend did not become reachable within 120 seconds.');
-      backendProcess.kill('SIGTERM');
+      if (backendProcess) {
+        backendProcess.kill('SIGTERM');
+      }
       process.exit(1);
     }
   }
 
-  console.log('[dev] Starting Next.js frontend on http://127.0.0.1:3000');
+  const frontendHost = process.env.NEXT_FRONTEND_HOST || '127.0.0.1';
+  const frontendPort = Number(process.env.NEXT_FRONTEND_PORT || '3000');
+  let frontendAlreadyRunning = await isPortOpen(frontendHost, frontendPort);
+  if (frontendAlreadyRunning) {
+    console.log(`[dev] Port ${frontendPort} is already in use. Terminating existing process...`);
+    const killed = killPort(frontendPort);
+    if (killed) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+
+  console.log(`[dev] Starting Next.js frontend on http://${frontendHost}:${frontendPort}`);
   const frontendProcess = startProcess('frontend', plan.frontend, env);
 
   const shutdown = (signal) => {

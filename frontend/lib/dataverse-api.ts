@@ -1,23 +1,73 @@
 /**
- * DataVerse AI API client — clean interface for 4 endpoints.
+ * DataVerse AI API client for the session-based backend.
  */
 
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_DATAVERSE_API_URL || 'http://127.0.0.1:8000';
+  process.env.NEXT_PUBLIC_DATAVERSE_API_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000';
 
-// ── Types ──────────────────────────────────────────────
-
-export type UploadResponse = {
-  dataset_id: string;
-  filename: string;
-  row_count: number;
-  column_count: number;
-  columns: string[];
-  profile: Record<string, unknown>;
-  message: string;
+export type ChartPayload = {
+  type: 'bar' | 'line' | 'pie' | 'donut' | string;
+  title: string;
+  data: Array<Record<string, unknown>>;
+  x_key: string;
+  y_key?: string;
 };
 
-<<<<<<< HEAD
+export type TablePayload = {
+  title: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+};
+
+export type AgentStep = {
+  name: string;
+  status: string;
+  timestamp?: string;
+  message?: string;
+};
+
+export type AgentSummary = {
+  name: string;
+  status: string;
+  summary?: string;
+  steps?: AgentStep[];
+};
+
+export type AnalysisResponse = {
+  session_id: string;
+  dataset_id: string;
+  title: string;
+  agents: AgentSummary[];
+  answer: string;
+  tables?: TablePayload[];
+  charts?: ChartPayload[];
+  warnings?: string[];
+  recommendations?: string[];
+  report?: {
+    report_id: string;
+    html_url?: string;
+    pdf_url?: string;
+  } | null;
+};
+
+export type UploadResponse = {
+  session_id: string;
+  success: boolean;
+  is_retail: boolean;
+  message: string;
+  dataset_id: string;
+  dataset_filename: string;
+  dataset_rows?: number;
+  dataset_cols?: number;
+  column_names: string[];
+  column_dtypes: string[];
+  dataset_profile: Record<string, unknown>;
+  dataset_preview?: Array<Record<string, unknown>>;
+  dataset_type?: string;
+  created_at?: string;
+  analysis?: AnalysisResponse | null;
+};
+
 export type AskResponse = {
   answer: string;
   summary: string;
@@ -26,7 +76,8 @@ export type AskResponse = {
   recommendations: string[];
   warnings: string[];
   next_questions: string[];
-=======
+};
+
 export type ChatSessionSummary = {
   id: string;
   title: string;
@@ -63,29 +114,6 @@ export type SessionDetail = ChatSessionSummary & {
   reports: Array<Record<string, unknown>>;
 };
 
-export type ChartPayload = {
-  type: 'bar' | 'line' | 'pie' | 'donut' | string;
-  title: string;
-  data: Array<Record<string, unknown>>;
-  x_key: string;
-  y_key?: string;
->>>>>>> 15b8a6d8 (new1)
-};
-
-export type TablePayload = {
-  title: string;
-  columns: string[];
-  rows: Record<string, unknown>[];
-};
-
-export type ChartPayload = {
-  title: string;
-  type: 'bar' | 'line' | 'pie';
-  x_key: string;
-  y_key: string;
-  data: Record<string, unknown>[];
-};
-
 export type ProfileResponse = {
   dataset_id: string;
   row_count: number;
@@ -94,25 +122,18 @@ export type ProfileResponse = {
   profile: Record<string, unknown>;
 };
 
-export type AnalysisResponse = {
-  session_id: string;
-  dataset_id: string;
-  title: string;
-  agents: Array<{ name: string; status: string; summary?: string }>;
-  answer: string;
-  tables?: TablePayload[];
-  charts?: ChartPayload[];
-  warnings?: string[];
+export type ChatEvent = {
+  step: string;
+  message: string;
+  table?: TablePayload;
+  chart?: ChartPayload;
   recommendations?: string[];
-  report?: {
-    report_id: string;
-    html_url?: string;
-    pdf_url?: string;
-  } | null;
+  suggestions?: string[];
 };
 
 export class DataVerseApiError extends Error {
   status: number;
+
   constructor(message: string, status: number) {
     super(message);
     this.name = 'DataVerseApiError';
@@ -120,7 +141,18 @@ export class DataVerseApiError extends Error {
   }
 }
 
-// ── API Functions ──────────────────────────────────────
+async function readError(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    return body.detail || body.message || response.statusText || 'Unknown error';
+  } catch {
+    try {
+      return (await response.text()) || response.statusText || 'Unknown error';
+    } catch {
+      return response.statusText || 'Unknown error';
+    }
+  }
+}
 
 export async function createSession(title = 'New Chat'): Promise<ChatSessionSummary> {
   const response = await fetch(`${API_BASE_URL}/api/sessions`, {
@@ -159,101 +191,93 @@ export async function listDatasets(): Promise<RecentDataset[]> {
   return response.json() as Promise<RecentDataset[]>;
 }
 
-export async function uploadDataset(file: File, sessionId?: string): Promise<UploadResponse> {
+export async function uploadDataset(
+  file: File,
+  sessionId?: string,
+  options: { autoAnalyze?: boolean; generateReport?: boolean; runXai?: boolean } = {},
+): Promise<UploadResponse> {
   const targetSessionId = sessionId || (await createSession()).id;
   const form = new FormData();
   form.append('file', file);
 
-<<<<<<< HEAD
-  const resp = await fetch(`${API_BASE_URL}/api/datasets/upload`, {
-=======
-  const response = await fetch(`${API_BASE_URL}/api/sessions/${targetSessionId}/datasets/upload`, {
->>>>>>> 15b8a6d8 (new1)
+  const params = new URLSearchParams({
+    auto_analyze: String(options.autoAnalyze ?? false),
+    generate_report: String(options.generateReport ?? true),
+    run_xai: String(options.runXai ?? true),
+  });
+
+  const response = await fetch(`${API_BASE_URL}/api/sessions/${targetSessionId}/datasets/upload?${params}`, {
     method: 'POST',
     body: form,
   });
 
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => ({ detail: 'Upload failed' }));
-    throw new DataVerseApiError(body.detail || 'Upload failed', resp.status);
+  if (!response.ok) {
+    throw new DataVerseApiError(await readError(response), response.status);
   }
 
-<<<<<<< HEAD
-  return resp.json();
-}
-
-export async function askDataset(
-  datasetId: string,
-  prompt: string,
-): Promise<AskResponse> {
-  const resp = await fetch(`${API_BASE_URL}/api/datasets/${datasetId}/ask`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => ({ detail: 'Query failed' }));
-    throw new DataVerseApiError(body.detail || 'Query failed', resp.status);
-  }
-
-  return resp.json();
-}
-
-export async function getProfile(
-  datasetId: string,
-): Promise<ProfileResponse> {
-  const resp = await fetch(
-    `${API_BASE_URL}/api/datasets/${datasetId}/profile`,
-  );
-
-  if (!resp.ok) {
-    const body = await resp
-      .json()
-      .catch(() => ({ detail: 'Failed to get profile' }));
-    throw new DataVerseApiError(
-      body.detail || 'Failed to get profile',
-      resp.status,
-    );
-  }
-
-  return resp.json();
-}
-
-export async function deleteDataset(
-  datasetId: string,
-): Promise<{ dataset_id: string; deleted: boolean }> {
-  const resp = await fetch(`${API_BASE_URL}/api/datasets/${datasetId}`, {
-    method: 'DELETE',
-  });
-
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => ({ detail: 'Delete failed' }));
-    throw new DataVerseApiError(body.detail || 'Delete failed', resp.status);
-  }
-
-  return resp.json();
-=======
   const payload = await response.json();
   const dataset = payload.dataset ?? {};
+  const columns = payload.columns ?? dataset.columns ?? [];
   return {
     session_id: payload.session_id,
     success: true,
-    message: 'Dataset uploaded.',
+    message: payload.analysis ? 'Dataset uploaded and analyzed.' : 'Dataset uploaded.',
     is_retail: false,
     dataset_id: payload.dataset_id,
     dataset_filename: payload.filename,
     dataset_rows: payload.row_count,
     dataset_cols: payload.column_count,
-    column_names: (payload.columns ?? []).map((column: { name?: string } | string) => typeof column === 'string' ? column : column.name || ''),
-    column_dtypes: (payload.columns ?? []).map((column: { dtype?: string } | string) => typeof column === 'string' ? '' : column.dtype || ''),
-    dataset_profile: dataset.schema_profile,
+    column_names: columns.map((column: { name?: string } | string) => typeof column === 'string' ? column : column.name || ''),
+    column_dtypes: columns.map((column: { dtype?: string } | string) => typeof column === 'string' ? '' : column.dtype || ''),
+    dataset_profile: dataset.schema_profile ?? {},
+    dataset_preview: dataset.schema_profile?.preview,
     dataset_type: dataset.schema_profile?.dataset_type,
     created_at: dataset.created_at,
+    analysis: payload.analysis ?? null,
   };
 }
 
-export async function analyzeSession(sessionId: string, datasetId: string, userPrompt = 'Analyze this dataset'): Promise<AnalysisResponse> {
+export async function askDataset(datasetId: string, prompt: string): Promise<AskResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/datasets/${datasetId}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+
+  if (!response.ok) {
+    throw new DataVerseApiError(await readError(response), response.status);
+  }
+
+  return response.json();
+}
+
+export async function getProfile(datasetId: string): Promise<ProfileResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/datasets/${datasetId}/profile`);
+
+  if (!response.ok) {
+    throw new DataVerseApiError(await readError(response), response.status);
+  }
+
+  return response.json();
+}
+
+export async function deleteDataset(datasetId: string): Promise<{ dataset_id: string; deleted: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/api/datasets/${datasetId}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new DataVerseApiError(await readError(response), response.status);
+  }
+
+  return response.json();
+}
+
+export async function analyzeSession(
+  sessionId: string,
+  datasetId: string,
+  userPrompt = 'Analyze this dataset',
+): Promise<AnalysisResponse> {
   const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -280,11 +304,19 @@ export async function streamQuery(
   }
   const result = await response.json() as AnalysisResponse;
   const events: ChatEvent[] = [
-    ...(result.agents ?? []).map((agent) => ({ step: agent.name, message: `${agent.name}: ${agent.status}${agent.summary ? ` - ${agent.summary}` : ''}` })),
+    ...(result.agents ?? []).flatMap((agent) => {
+      const steps = agent.steps?.map((step) => ({
+        step: agent.name,
+        message: `${agent.name} / ${step.name}: ${step.status}`,
+      })) ?? [];
+      return [
+        { step: agent.name, message: `${agent.name}: ${agent.status}${agent.summary ? ` - ${agent.summary}` : ''}` },
+        ...steps,
+      ];
+    }),
     { step: 'narration', message: result.answer, recommendations: result.recommendations },
   ];
   events.forEach((event) => onEvent?.(event));
 
   return events;
->>>>>>> 15b8a6d8 (new1)
 }

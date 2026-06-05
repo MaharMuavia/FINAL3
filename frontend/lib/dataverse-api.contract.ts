@@ -16,7 +16,7 @@ async function contract(file: File): Promise<void> {
   await deleteDataset(uploaded.dataset_id);
 
   API_BASE_URL.toString();
-  uploaded.columns.map((col) => col.toLowerCase());
+  uploaded.column_names.map((col) => col.toLowerCase());
   answer.tables.map((t) => t.title);
   profile.columns.length;
 }
