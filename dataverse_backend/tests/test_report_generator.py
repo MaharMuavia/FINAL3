@@ -5,7 +5,7 @@ import asyncio
 from dataverse_backend.app.services.report_generator import ReportGenerator
 
 
-def test_report_generation_handles_zero_value_bar_charts():
+def test_report_generation_skips_zero_value_bar_charts():
     facts = {
         "filename": "zero_values.csv",
         "dataset_profile": {"row_count": 2, "column_count": 2},
@@ -28,6 +28,6 @@ def test_report_generation_handles_zero_value_bar_charts():
 
     generated = asyncio.run(ReportGenerator().generate(title="Zero Value Report", facts=facts))
 
-    assert "<svg" in str(generated["html"])
+    assert "Zero values" not in str(generated["html"])
     assert isinstance(generated["pdf"], bytes)
     assert len(generated["pdf"]) > 100

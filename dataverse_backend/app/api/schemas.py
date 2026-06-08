@@ -65,6 +65,7 @@ class AnalyzeUploadResponse(BaseModel):
     target_suggestions: List[Dict[str, Any]]
     prediction: Dict[str, Any]
     xai: Dict[str, Any]
+    kpis: List[Dict[str, Any]] = Field(default_factory=list)
     charts: List[Dict[str, Any]]
     executive_summary: str
     key_insights: List[str]
@@ -80,23 +81,13 @@ class AnalyzeQueryRequest(BaseModel):
     task_type: Optional[str] = None
     run_predictions: Optional[bool] = None
     run_xai: Optional[bool] = None
-    use_llm: bool = False
+    use_llm: bool = True
     provider: Optional[str] = None
 
 
 class AnalyzeQueryResponse(AnalyzeUploadResponse):
     pass
 
-
-class UploadProfileResponse(BaseModel):
-    session_id: str
-    filename: Optional[str] = None
-    dataset_profile: Dict[str, Any]
-    data_quality: Optional[Dict[str, Any]] = None
-
-
-class ErrorResponse(BaseModel):
-    detail: str
 
 
 class ChatSessionCreate(BaseModel):

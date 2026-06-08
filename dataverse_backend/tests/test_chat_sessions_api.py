@@ -16,6 +16,16 @@ def _csv_bytes() -> bytes:
     ).encode("utf-8")
 
 
+def _food_csv_bytes() -> bytes:
+    return (
+        "food_name,food_description,main_ingredient,cuisine,spice_level,calories,category\n"
+        "Pizza,cheesy flatbread,Cheese,Italian,Low,570,Fast Food\n"
+        "Burger,grilled sandwich,Beef,American,Medium,650,Fast Food\n"
+        "Biryani,spiced rice dish,Rice,Pakistani,High,720,Main Course\n"
+        "Pizza,cheesy flatbread,Cheese,Italian,Low,570,Fast Food\n"
+    ).encode("utf-8")
+
+
 def test_session_upload_analysis_report_local_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(session_service.supabase, "url", "")
     monkeypatch.setattr(session_service.supabase, "service_role_key", None)
@@ -117,21 +127,80 @@ def test_food_dataset_upload_persists_semantic_type(tmp_path, monkeypatch):
 
     client = TestClient(app)
     session_id = client.post("/api/sessions", json={"title": "New Chat"}).json()["session_id"]
-    food_csv = (
-        "food_name,food_description,main_ingredient,cuisine,spice_level,calories,category\n"
-        "Pizza,cheesy flatbread,Cheese,Italian,Low,570,Fast Food\n"
-        "Burger,grilled sandwich,Beef,American,Medium,650,Fast Food\n"
-    ).encode("utf-8")
-
     uploaded = client.post(
         f"/api/sessions/{session_id}/datasets/upload",
-        files={"file": ("food_dataset_extended.csv", food_csv, "text/csv")},
+        files={"file": ("food_dataset_extended.csv", _food_csv_bytes(), "text/csv")},
     )
 
     assert uploaded.status_code == 200
     dataset = uploaded.json()["dataset"]
     assert dataset["semantic_map"]["dataset_type"] == "food_dataset"
     assert dataset["schema_profile"]["dataset_type"] == "food_dataset"
+
+
+def test_food_dataset_chat_message_deduplicates_frequency_tables(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service.supabase, "url", "")
+    monkeypatch.setattr(session_service.supabase, "service_role_key", None)
+    monkeypatch.setattr(session_service, "local", LocalPersistence(tmp_path / "chat_store"))
+
+    client = TestClient(app)
+    session_id = client.post("/api/sessions", json={"title": "New Chat"}).json()["session_id"]
+    upload = client.post(
+        f"/api/sessions/{session_id}/datasets/upload?auto_analyze=false",
+        files={"file": ("food_dataset_extended.csv", _food_csv_bytes(), "text/csv")},
+    )
+
+    assert upload.status_code == 200
+    dataset_id = upload.json()["dataset_id"]
+    message = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={"content": "What is the most sold product?", "dataset_id": dataset_id},
+    )
+
+    assert message.status_code == 200
+    titles = [table["title"] for table in message.json()["tables"]]
+    assert titles.count("Most frequent food item") == 1
+
+
+def _retail_csv_bytes(rows: int = 36) -> bytes:
+    lines = [
+        "order_id,order_datetime,store_id,region,city,product_id,category,subcategory,unit_price,quantity,discount,total_sales,profit,customer_id,customer_type,payment_method,online_order,stockout_flag,weekday,month"
+    ]
+    regions = ["Punjab", "Sindh", "KPK"]
+    categories = ["Electronics", "Grocery", "Fashion"]
+    for idx in range(rows):
+        quantity = 1 + (idx % 4)
+        unit_price = 100 + (idx % 7) * 10
+        discount = 5 if idx % 5 == 0 else 0
+        total_sales = quantity * unit_price - discount
+        profit = round(total_sales * 0.15, 2)
+        lines.append(
+            ",".join(
+                [
+                    f"ORD_{idx:05d}",
+                    f"2026-01-{(idx % 28) + 1:02d} 10:00:00",
+                    f"STORE_{idx % 4}",
+                    regions[idx % len(regions)],
+                    f"City_{idx % 5}",
+                    f"PROD_{idx % 9}",
+                    categories[idx % len(categories)],
+                    f"Sub_{idx % 6}",
+                    str(unit_price),
+                    str(quantity),
+                    str(discount),
+                    str(total_sales),
+                    str(profit),
+                    f"CUST_{idx:05d}",
+                    "Member" if idx % 2 == 0 else "Guest",
+                    "Card" if idx % 2 == 0 else "Cash",
+                    "true" if idx % 3 == 0 else "false",
+                    "true" if idx % 11 == 0 else "false",
+                    ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][idx % 7],
+                    ["Jan", "Feb", "Mar"][idx % 3],
+                ]
+            )
+        )
+    return "\n".join(lines).encode("utf-8")
 
 
 def test_multiple_datasets_in_same_session_do_not_overwrite(tmp_path, monkeypatch):
@@ -175,3 +244,30 @@ def test_storage_status_local_mode(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["mode"] == "local"
     assert response.json()["supabase_configured"] is False
+
+
+def test_total_sales_message_returns_focused_answer_without_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(session_service.supabase, "url", "")
+    monkeypatch.setattr(session_service.supabase, "service_role_key", None)
+    monkeypatch.setattr(session_service, "local", LocalPersistence(tmp_path / "chat_store"))
+
+    client = TestClient(app)
+    session_id = client.post("/api/sessions", json={"title": "Retail Chat"}).json()["session_id"]
+    uploaded = client.post(
+        f"/api/sessions/{session_id}/datasets/upload?auto_analyze=false",
+        files={"file": ("retail_mart_final.csv", _retail_csv_bytes(), "text/csv")},
+    )
+    dataset_id = uploaded.json()["dataset_id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={"content": "total sales", "dataset_id": dataset_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"].startswith("Total sales are")
+    assert body["report"] is None
+    assert body["xai"] is None
+    assert body["kpis"]
+    assert body["charts"] == []

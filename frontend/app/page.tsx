@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -40,6 +40,7 @@ type ChatMessage = {
   role: ChatRole;
   content: string;
   events?: ChatEvent[];
+  kpis?: Array<{ label: string; value: string | number | null }>;
   charts?: ChartPayload[];
   tables?: TablePayload[];
   recommendations?: string[];
@@ -48,6 +49,15 @@ type ChatMessage = {
     report_id: string;
     html_url?: string;
     pdf_url?: string;
+  } | null;
+  xai?: {
+    status?: string;
+    method?: string;
+    global_feature_importance?: Array<{ feature: string; importance: number }>;
+    top_features?: string[];
+    local_explanations?: Array<{ sample_index: number; top_contributors: Array<{ feature: string; shap_value: number }> }>;
+    plain_english_explanation?: string;
+    warnings?: string[];
   } | null;
   isLoading?: boolean;
 };
@@ -110,6 +120,34 @@ const formatCell = (value: unknown) => {
   if (value === null || value === undefined || value === '') return '-';
   if (typeof value === 'number') return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value);
   return String(value);
+};
+
+const keyedLabel = (scope: string, label: string | undefined, index: number) =>
+  `${scope}-${label || 'item'}-${index}`;
+
+const isInvalidChartLabel = (value: unknown) => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return !normalized || ['n/a', 'na', 'nan', 'none', 'null'].includes(normalized);
+};
+
+const validateChartPayload = (chart: ChartPayload) => {
+  const data = Array.isArray(chart.data) ? chart.data.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object') : [];
+  const xKey = chart.x_key;
+  const yKey = chart.y_key;
+  if (!data.length || !xKey || !yKey) return { data: [], values: [], valid: false };
+  const values: number[] = [];
+  for (const row of data) {
+    if (!(xKey in row) || !(yKey in row) || isInvalidChartLabel(row[xKey])) {
+      return { data: [], values: [], valid: false };
+    }
+    const value = Number(row[yKey]);
+    if (!Number.isFinite(value)) {
+      return { data: [], values: [], valid: false };
+    }
+    values.push(value);
+  }
+  if (!values.length || values.every((value) => value === 0)) return { data: [], values: [], valid: false };
+  return { data, values, valid: true };
 };
 
 const datasetTypeOf = (dataset: DatasetSummary | null) => dataset?.dataset_type || String(dataset?.dataset_profile?.dataset_type || 'generic');
@@ -279,16 +317,16 @@ const ResultTable = ({ table }: { table: TablePayload }) => (
       <table className="w-full text-left text-xs">
         <thead className="bg-[#131b2e] text-[#cbc3d7]">
           <tr>
-            {table.columns.map((column) => (
-              <th key={column} className="px-4 py-3 font-semibold whitespace-nowrap">{column}</th>
+            {table.columns.map((column, columnIndex) => (
+              <th key={keyedLabel('table-column', column, columnIndex)} className="px-4 py-3 font-semibold whitespace-nowrap">{column}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {table.rows.slice(0, 10).map((row, index) => (
             <tr key={index} className="border-t border-[#494454]/30 text-slate-100">
-              {table.columns.map((column) => (
-                <td key={column} className="px-4 py-3 whitespace-nowrap">{formatCell(row[column])}</td>
+              {table.columns.map((column, columnIndex) => (
+                <td key={keyedLabel(`table-cell-${index}`, column, columnIndex)} className="px-4 py-3 whitespace-nowrap">{formatCell(row[column])}</td>
               ))}
             </tr>
           ))}
@@ -298,20 +336,74 @@ const ResultTable = ({ table }: { table: TablePayload }) => (
   </GlassCard>
 );
 
+const KpiStrip = ({ kpis }: { kpis: Array<{ label: string; value: string | number | null }> }) => (
+  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+    {kpis.map((kpi, index) => (
+      <GlassCard key={keyedLabel('kpi', kpi.label, index)} className="p-4 border-blue-500/20">
+        <div className="text-[11px] uppercase tracking-[0.08em] text-[#cbc3d7]">{kpi.label}</div>
+        <div className="mt-2 text-lg font-semibold text-white">{formatCell(kpi.value)}</div>
+      </GlassCard>
+    ))}
+  </div>
+);
+
 const SimpleChart = ({ chart }: { chart: ChartPayload }) => {
   const yKey = chart.y_key;
-  const data = Array.isArray(chart.data) ? chart.data.filter(Boolean) : [];
-  const values = yKey ? data.map((row) => Number(row[yKey]) || 0) : [];
+  const validated = validateChartPayload(chart);
+  const data = validated.data;
+  const values = validated.values;
   const max = Math.max(...values.map((value) => Math.abs(value)), 1);
   const colors = ['#8b5cf6', '#3b82f6', '#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#14b8a6', '#a855f7'];
   const labelOf = (row: Record<string, unknown>) => formatCell(row[chart.x_key]);
 
-  if (!data.length || !chart.x_key || !yKey) {
+  if (!validated.valid || !yKey) {
     return (
       <GlassCard className="p-4 border-amber-500/20">
         <div className="flex items-center gap-3">
           <AlertTriangle size={16} className="text-amber-300" />
           <span className="text-sm text-[#cbc3d7]">{chart.title || 'Chart'} has no displayable data.</span>
+        </div>
+      </GlassCard>
+    );
+  }
+
+  if (chart.type === 'confusion_matrix') {
+    const actualLabels = Array.from(new Set(data.map((row) => formatCell(row.actual)))).sort();
+    const predictedLabels = Array.from(new Set(data.map((row) => formatCell(row.predicted)))).sort();
+    const countByPair = new Map(data.map((row) => [`${formatCell(row.actual)}|${formatCell(row.predicted)}`, Number(row.count) || 0]));
+    const largest = Math.max(...Array.from(countByPair.values()), 1);
+    return (
+      <GlassCard className="p-4 border-blue-500/20">
+        <div className="flex items-center gap-3 mb-4">
+          <BarChart2 size={16} className="text-blue-400" />
+          <span className="text-sm font-medium text-white">{chart.title}</span>
+        </div>
+        <div className="overflow-x-auto">
+          <div
+            className="grid gap-1 min-w-max text-[10px]"
+            style={{ gridTemplateColumns: `120px repeat(${predictedLabels.length}, minmax(48px, 1fr))` }}
+          >
+            <div className="text-[#cbc3d7]">Actual \ Predicted</div>
+            {predictedLabels.map((label) => <div key={label} className="text-[#cbc3d7] truncate" title={label}>{label}</div>)}
+            {actualLabels.map((actual) => (
+              <React.Fragment key={actual}>
+                <div className="text-[#cbc3d7] truncate py-2" title={actual}>{actual}</div>
+                {predictedLabels.map((predicted) => {
+                  const count = countByPair.get(`${actual}|${predicted}`) ?? 0;
+                  const opacity = 0.18 + (count / largest) * 0.72;
+                  return (
+                    <div
+                      key={`${actual}-${predicted}`}
+                      className="rounded-md py-2 text-center font-mono text-white"
+                      style={{ backgroundColor: `rgba(59, 130, 246, ${opacity})` }}
+                    >
+                      {formatCell(count)}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
         </div>
       </GlassCard>
     );
@@ -1130,7 +1222,7 @@ const ChatView = ({
   onSubmit: (query: string) => void;
   onRunFullAnalysis: () => void;
 }) => {
-  const [showPanel, setShowPanel] = useState(true);
+  const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
   const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
   const latestEvents = latestAssistant?.events ?? [];
 
@@ -1199,7 +1291,7 @@ const ChatView = ({
 
                 {message.role === 'assistant' && message.events?.length ? (
                   <div className="bg-[#171f33]/50 border border-[#494454]/50 rounded-xl overflow-hidden backdrop-blur-md">
-                    <button onClick={() => setShowPanel(!showPanel)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors">
+                    <button onClick={() => setOpenPanels(prev => ({ ...prev, [message.id]: !(openPanels[message.id] !== false) }))} className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors">
                       <div className="flex items-center gap-3">
                         {message.isLoading ? (
                           <div className="w-4 h-4 border-2 border-violet-400 border-t-transparent rounded-full animate-spin"></div>
@@ -1210,11 +1302,11 @@ const ChatView = ({
                           {message.isLoading ? 'Analyzing dataset...' : 'Analysis complete'}
                         </span>
                       </div>
-                      <ArrowUp size={16} className={`text-[#cbc3d7] transition-transform duration-300 ${showPanel ? 'rotate-180' : ''}`} />
+                      <ArrowUp size={16} className={`text-[#cbc3d7] transition-transform duration-300 ${openPanels[message.id] !== false ? 'rotate-180' : ''}`} />
                     </button>
 
                     <AnimatePresence>
-                      {showPanel && (
+                      {openPanels[message.id] !== false && (
                         <motion.div
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: 'auto', opacity: 1 }}
@@ -1235,12 +1327,14 @@ const ChatView = ({
                   </div>
                 ) : null}
 
-                {message.tables?.map((table) => (
-                  <ResultTable key={`${message.id}-${table.title}`} table={table} />
+                {message.tables?.map((table, index) => (
+                  <ResultTable key={keyedLabel(`${message.id}-table`, table.title, index)} table={table} />
                 ))}
 
-                {message.charts?.map((chart) => (
-                  <SimpleChart key={`${message.id}-${chart.title}`} chart={chart} />
+                {message.kpis?.length ? <KpiStrip kpis={message.kpis} /> : null}
+
+                {message.charts?.map((chart, index) => (
+                  <SimpleChart key={keyedLabel(`${message.id}-chart`, chart.title, index)} chart={chart} />
                 ))}
 
                 {message.recommendations?.length ? (
@@ -1250,8 +1344,8 @@ const ChatView = ({
                       <span className="text-sm font-medium text-white">Recommendations</span>
                     </div>
                     <ul className="space-y-2">
-                      {message.recommendations.map((recommendation) => (
-                        <li key={recommendation} className="text-xs text-[#cbc3d7] leading-relaxed">{recommendation}</li>
+                      {message.recommendations.map((recommendation, index) => (
+                        <li key={keyedLabel(`${message.id}-recommendation`, recommendation, index)} className="text-xs text-[#cbc3d7] leading-relaxed">{recommendation}</li>
                       ))}
                     </ul>
                   </GlassCard>
@@ -1290,9 +1384,9 @@ const ChatView = ({
 
                 {message.suggestions?.length ? (
                   <div className="flex flex-wrap gap-2">
-                    {message.suggestions.map((suggestion) => (
+                    {message.suggestions.map((suggestion, index) => (
                       <button
-                        key={suggestion}
+                        key={keyedLabel(`${message.id}-suggestion`, suggestion, index)}
                         type="button"
                         onClick={() => onSubmit(suggestion)}
                         className="text-xs text-violet-200 bg-violet-500/10 border border-violet-500/30 rounded-full px-3 py-1 hover:bg-violet-500/20 transition-colors"
@@ -1342,6 +1436,10 @@ const DataHubView = ({
   const assistantMessages = messages.filter((message) => message.role === 'assistant');
   const latestAssistant = assistantMessages.at(-1);
   const latestNarrative = latestAssistant?.content || 'Upload a dataset and run an analysis to populate this workspace with live backend results.';
+  const xaiData = latestAssistant?.xai;
+  const globalImportance = Array.isArray(xaiData?.global_feature_importance)
+    ? xaiData.global_feature_importance
+    : [];
   const schemaPreview = dataset?.column_names?.slice(0, 6) ?? [];
   const dtypeMap = new Map((dataset?.column_names ?? []).map((column, index) => [column, dataset?.column_dtypes?.[index]]));
   const numericColumns = (dataset?.column_names ?? []).filter((column) => isNumericType(dtypeMap.get(column)));
@@ -1504,13 +1602,13 @@ const DataHubView = ({
                 <table className="w-full text-left text-xs">
                   <thead className="bg-[#131b2e] text-[#cbc3d7]">
                     <tr>
-                      {previewColumns.map((column) => <th key={column} className="px-4 py-3 font-semibold whitespace-nowrap">{column}</th>)}
+                      {previewColumns.map((column, columnIndex) => <th key={keyedLabel('preview-column', column, columnIndex)} className="px-4 py-3 font-semibold whitespace-nowrap">{column}</th>)}
                     </tr>
                   </thead>
                   <tbody>
                     {previewRows.slice(0, 5).map((row, index) => (
                       <tr key={index} className="border-t border-[#494454]/30 text-slate-100">
-                        {previewColumns.map((column) => <td key={column} className="px-4 py-3 whitespace-nowrap">{formatCell(row[column])}</td>)}
+                        {previewColumns.map((column, columnIndex) => <td key={keyedLabel(`preview-cell-${index}`, column, columnIndex)} className="px-4 py-3 whitespace-nowrap">{formatCell(row[column])}</td>)}
                       </tr>
                     ))}
                   </tbody>
@@ -1576,16 +1674,32 @@ const DataHubView = ({
                            <button className="border-b-2 border-transparent py-2 text-xs font-semibold text-[#cbc3d7] hover:text-white transition-colors">Local (LIME)</button>
                       </div>
 
-                      <div className="space-y-5 flex-1">
-                          {(numericColumns.length ? numericColumns : ['Upload a numeric column']).slice(0, 4).map((name, index) => ({ name, score: Math.max(0.05, 0.24 - index * 0.045), w: `${Math.max(25, 100 - index * 20)}%` })).map((feat) => (
-                             <div key={feat.name} className="flex items-center gap-4">
-                                <div className="w-32 sm:w-40 text-[11px] font-mono text-right truncate text-white border-r border-[#494454]/50 pr-4">{feat.name}</div>
-                                <div className="flex-1 flex items-center group">
-                                   <div className="h-2.5 bg-violet-500/80 rounded-r-sm group-hover:bg-violet-400 transition-colors" style={{ width: feat.w }}></div>
+                      <div className="space-y-5 flex-1 justify-center flex flex-col">
+                          {globalImportance.length ? (
+                            globalImportance.slice(0, 6).map((feat) => {
+                              const percent = Math.min(100, Math.max(5, feat.importance * 100));
+                              return (
+                                <div key={feat.feature} className="flex items-center gap-4">
+                                  <div className="w-32 sm:w-40 text-[11px] font-mono text-right truncate text-white border-r border-[#494454]/50 pr-4">{feat.feature}</div>
+                                  <div className="flex-1 flex items-center group">
+                                     <div className="h-2.5 bg-violet-500/80 rounded-r-sm group-hover:bg-violet-400 transition-colors" style={{ width: `${percent}%` }}></div>
+                                  </div>
+                                  <div className="w-12 text-[11px] text-[#cbc3d7] font-mono text-right">{feat.importance.toFixed(3)}</div>
                                 </div>
-                                <div className="w-12 text-[11px] text-[#cbc3d7] font-mono text-right">{feat.score.toFixed(3)}</div>
-                             </div>
-                          ))}
+                              );
+                            })
+                          ) : (
+                            <div className="text-center py-4 text-xs text-[#cbc3d7]">
+                              {dataset ? (
+                                <div>
+                                  <p className="font-semibold text-white mb-1">No feature importance data yet</p>
+                                  <p className="max-w-md mx-auto">Predictions require at least 30 rows. Run a forecast or regression query to train models and generate XAI features.</p>
+                                </div>
+                              ) : (
+                                <p>Upload a dataset to see model explainability metrics.</p>
+                              )}
+                            </div>
+                          )}
                       </div>
                   </div>
               </div>
@@ -1630,6 +1744,7 @@ const DataHubView = ({
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewState>('landing');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [recentDatasets, setRecentDatasets] = useState<RecentDataset[]>([]);
@@ -1689,6 +1804,7 @@ export default function App() {
   }, []);
 
   const handleNewChat = async () => {
+    setIsMobileSidebarOpen(false);
     const token = nextRequestToken();
     setDataset(null);
     setMessages([]);
@@ -1709,6 +1825,7 @@ export default function App() {
   };
 
   const loadSession = async (sessionId: string) => {
+    setIsMobileSidebarOpen(false);
     const token = nextRequestToken();
     const detail = await getSession(sessionId);
     if (isStaleRequest(token)) return;
@@ -1725,10 +1842,12 @@ export default function App() {
           message: `${agent.name}: ${agent.status}${agent.summary ? ` - ${agent.summary}` : ''}`,
         }))
         : undefined,
+      kpis: item.payload?.kpis as ChatMessage['kpis'],
       charts: item.payload?.charts as ChartPayload[] | undefined,
       tables: item.payload?.tables as TablePayload[] | undefined,
       recommendations: item.payload?.recommendations as string[] | undefined,
       report: item.payload?.report as ChatMessage['report'],
+      xai: item.payload?.xai as ChatMessage['xai'],
     })));
     setCurrentView('chat');
     await refreshSidebar();
@@ -1835,10 +1954,12 @@ export default function App() {
                   message: `${agent.name} / ${step.name}: ${step.status}`,
                 })),
               ]),
+              kpis: result.kpis,
               tables: result.tables,
               charts: result.charts,
               recommendations: result.recommendations,
               report: result.report,
+              xai: result.xai as ChatMessage['xai'],
               isLoading: false,
             }
           : message
@@ -1934,15 +2055,17 @@ export default function App() {
       const detail = await getSession(sessionId);
       if (isStaleRequest(token)) return;
       const lastAssistant = [...detail.messages].reverse().find((item) => item.role === 'assistant');
-      if (lastAssistant?.payload?.report) {
+      if (lastAssistant) {
         setMessages((current) => current.map((message) => (
           message.id === assistantId
             ? {
                 ...message,
                 report: lastAssistant.payload?.report as ChatMessage['report'],
+                kpis: lastAssistant.payload?.kpis as ChatMessage['kpis'],
                 charts: lastAssistant.payload?.charts as ChartPayload[] | undefined,
                 tables: lastAssistant.payload?.tables as TablePayload[] | undefined,
                 recommendations: lastAssistant.payload?.recommendations as string[] | undefined,
+                xai: lastAssistant.payload?.xai as ChatMessage['xai'],
               }
             : message
         )));
@@ -1983,8 +2106,16 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-[#0b1326] text-white font-sans overflow-hidden">
       
-      {/* --- Desktop Sidebar --- */}
-      <aside className="hidden md:flex bg-[#171f33] w-[280px] h-full rounded-r-2xl border-r border-[#494454]/30 shadow-2xl flex-col py-6 shrink-0 z-40">
+      {/* --- Mobile Sidebar Backdrop --- */}
+      {isMobileSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 md:hidden"
+          onClick={() => setIsMobileSidebarOpen(false)}
+        />
+      )}
+
+      {/* --- Desktop & Mobile Sidebar --- */}
+      <aside className={`bg-[#171f33] w-[280px] h-full rounded-r-2xl border-r border-[#494454]/30 shadow-2xl flex-col py-6 shrink-0 z-50 md:flex md:relative ${isMobileSidebarOpen ? 'flex fixed inset-y-0 left-0' : 'hidden'}`}>
         <div className="px-6 mb-6 mt-2">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-full border-2 border-violet-500/30 overflow-hidden shadow-inner">
@@ -2006,11 +2137,11 @@ export default function App() {
               <Sparkles size={18} />
               <span className="text-sm">New Chat</span>
             </button>
-            <button onClick={() => setCurrentView('chat')} className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${currentView === 'chat' ? 'bg-violet-500/15 text-violet-300 font-medium' : 'text-[#cbc3d7] hover:bg-white/5 hover:text-white'}`}>
+            <button onClick={() => { setCurrentView('chat'); setIsMobileSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${currentView === 'chat' ? 'bg-violet-500/15 text-violet-300 font-medium' : 'text-[#cbc3d7] hover:bg-white/5 hover:text-white'}`}>
               <History size={18} />
               <span className="text-sm">Active Run</span>
             </button>
-            <button onClick={() => setCurrentView('data')} className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${currentView === 'data' ? 'bg-violet-500/15 text-violet-300 font-medium' : 'text-[#cbc3d7] hover:bg-white/5 hover:text-white'}`}>
+            <button onClick={() => { setCurrentView('data'); setIsMobileSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${currentView === 'data' ? 'bg-violet-500/15 text-violet-300 font-medium' : 'text-[#cbc3d7] hover:bg-white/5 hover:text-white'}`}>
               <Database size={18} />
               <span className="text-sm">Dashboards</span>
             </button>
@@ -2094,7 +2225,7 @@ export default function App() {
         {/* --- Top Header Overlay --- */}
         <header className="absolute top-0 w-full z-40 bg-[#0b1326]/70 backdrop-blur-xl border-b border-[#494454]/30 shadow-sm flex items-center justify-between px-4 md:px-8 h-16">
           <div className="flex items-center gap-4">
-            <button className="md:hidden text-[#cbc3d7] hover:text-white">
+            <button onClick={() => setIsMobileSidebarOpen(true)} className="md:hidden text-[#cbc3d7] hover:text-white">
               <Menu size={24} />
             </button>
             <div className="hidden md:flex items-center gap-3">

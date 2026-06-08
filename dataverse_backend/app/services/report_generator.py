@@ -12,6 +12,7 @@ from typing import Any
 from jinja2 import Template
 
 from ..core.config import settings
+from .data_quality import validate_chart_spec
 from .llm_provider import LLMProvider
 
 
@@ -67,7 +68,7 @@ REPORT_TEMPLATE = Template(
   </header>
   <main class="page">
     <section class="section">
-      <h2>Business KPI Cards</h2>
+      <h2>{{ metric_title }}</h2>
       <div class="grid">
         {% for metric in metrics %}
           <div class="card"><div class="label">{{ metric.label }}</div><div class="value">{{ metric.value }}</div></div>
@@ -130,11 +131,8 @@ class ReportGenerator:
     def _render_html(self, title: str, facts: dict[str, Any], xai_output: dict[str, Any], sections: list[dict[str, str]]) -> str:
         profile = facts.get("dataset_profile") or {}
         metrics = self._metric_cards(facts)
-        charts = [
-            {"title": html.escape(str(chart.get("title", "Chart"))), "svg": self._chart_svg(chart)}
-            for chart in (facts.get("charts") or [])[:10]
-            if isinstance(chart.get("data"), list) and chart.get("data")
-        ]
+        valid_charts = [chart for chart in (facts.get("charts") or []) if _chart_is_renderable(chart)][:10]
+        charts = [{"title": html.escape(str(chart.get("title", "Chart"))), "svg": self._chart_svg(chart)} for chart in valid_charts]
         tables = self._tables(facts)
         insights = [html.escape(str(item)) for item in (facts.get("key_insights") or [])[:12]]
         if not insights:
@@ -145,6 +143,7 @@ class ReportGenerator:
             filename=html.escape(str(facts.get("filename") or profile.get("filename") or "uploaded dataset")),
             rows=profile.get("row_count", 0),
             cols=profile.get("column_count", 0),
+            metric_title="Dataset Summary Cards" if _is_food_dataset(facts) else "Summary Cards",
             metrics=metrics,
             insights=insights,
             charts=charts,
@@ -154,6 +153,8 @@ class ReportGenerator:
 
     async def _sections(self, *, title: str, facts: dict[str, Any], xai_output: dict[str, Any]) -> list[dict[str, str]]:
         deterministic = self._deterministic_sections(facts, xai_output)
+        if _is_food_dataset(facts):
+            return deterministic
         if not self.llm_provider.is_configured():
             return deterministic
         prompt = (
@@ -188,9 +189,36 @@ class ReportGenerator:
         quality = facts.get("data_quality") or {}
         business = facts.get("business_metrics") or {}
         product = facts.get("product_analysis") or {}
+        food = facts.get("food_analysis") or {}
         prediction = facts.get("prediction") or {}
         xai = xai_output or facts.get("xai") or {}
         semantic = facts.get("semantic_map") or {}
+        query_plan = facts.get("query_plan") or {}
+        query_answer = facts.get("query_answer") or {}
+        if str(query_plan.get("intent")) == "total_sales":
+            sections = [
+                ("Direct Answer", query_answer.get("answer") or "Total sales overview is ready."),
+                ("Dataset Overview", f"Rows: {profile.get('row_count', 0)}. Columns: {profile.get('column_count', 0)}. Detected type: {semantic.get('dataset_type', profile.get('dataset_type', 'generic_tabular'))}."),
+                ("Data Quality", f"Missing cells: {quality.get('missing_cells', quality.get('total_missing', 0))}. Duplicate rows: {quality.get('duplicate_rows', 0)}. Quality score: {quality.get('data_quality_score', quality.get('score', 'n/a'))}."),
+                ("Top Context", _focused_sales_context(business)),
+                ("Recommendations", " ".join(facts.get("recommendations") or query_answer.get("recommendations") or []) or "Ask for month, category, or region breakdowns for more detail."),
+                ("Limitations", " ".join(facts.get("warnings") or []) or "No major automated warnings."),
+            ]
+            return [{"title": title, "body": html.escape(str(body)).replace("\n", "<br />")} for title, body in sections]
+        if _is_food_dataset(facts):
+            sections = [
+                ("Dataset Overview", f"Rows: {profile.get('row_count', 0)}. Columns: {profile.get('column_count', 0)}. Detected as a food classification / food catalog dataset."),
+                ("Data Quality", f"Missing cells: {quality.get('missing_cells', quality.get('total_missing', 0))}. Duplicate rows: {quality.get('duplicate_rows', 0)}. Quality score: {quality.get('data_quality_score', quality.get('score', 'n/a'))}."),
+                ("Dataset Limitations", (food.get("warnings") or ["This dataset does not contain sales, revenue, profit, quantity, order date, or transaction columns. Therefore revenue analysis, most-sold product analysis, sales trends, and profit analysis cannot be calculated."])[0]),
+                ("Food Frequency Analysis", " ".join(food.get("insights", [])) or self._product_section(product)),
+                ("Calories Statistics", json.dumps(food.get("calories_stats") or {}, default=str)),
+                ("Duplicate Row Warning", f"Duplicate rows detected: {quality.get('duplicate_rows', 0)}."),
+                ("Prediction/Model Summary", _prediction_text(prediction)),
+                ("XAI Explanation", _xai_text(xai, prediction)),
+                ("Recommendations", " ".join(facts.get("recommendations") or food.get("recommendations") or []) or "Review catalog frequencies and collect transaction fields before sales analysis."),
+                ("Next Questions", " ".join(facts.get("next_questions") or food.get("next_questions") or []) or "Ask about category, cuisine, ingredient, spice level, or calories patterns."),
+            ]
+            return [{"title": title, "body": html.escape(str(body)).replace("\n", "<br />")} for title, body in sections]
         sections = [
             ("Dataset Overview", f"Rows: {profile.get('row_count', 0)}. Columns: {profile.get('column_count', 0)}. Detected type: {semantic.get('dataset_type', profile.get('dataset_type', 'generic_tabular'))}."),
             ("Data Quality", f"Missing cells: {quality.get('missing_cells', quality.get('total_missing', 0))}. Duplicate rows: {quality.get('duplicate_rows', 0)}. Quality score: {quality.get('data_quality_score', quality.get('score', 'n/a'))}."),
@@ -206,6 +234,22 @@ class ReportGenerator:
         return [{"title": title, "body": html.escape(str(body)).replace("\n", "<br />")} for title, body in sections]
 
     def _metric_cards(self, facts: dict[str, Any]) -> list[dict[str, str]]:
+        if facts.get("kpis"):
+            return [{"label": str(item.get("label", "Metric")), "value": html.escape(_fmt(item.get("value")))} for item in facts.get("kpis", [])]
+        if _is_food_dataset(facts):
+            profile = facts.get("dataset_profile") or {}
+            quality = facts.get("data_quality") or {}
+            food = facts.get("food_analysis") or {}
+            calories = food.get("calories_stats") or {}
+            items = [
+                ("Rows", profile.get("row_count")),
+                ("Columns", profile.get("column_count")),
+                ("Missing Cells", quality.get("missing_cells")),
+                ("Duplicate Rows", quality.get("duplicate_rows")),
+                ("Mean Calories", calories.get("mean")),
+                ("Quality Score", quality.get("data_quality_score")),
+            ]
+            return [{"label": label, "value": html.escape(_fmt(value))} for label, value in items if value is not None]
         business = facts.get("business_metrics") or {}
         quality = facts.get("data_quality") or {}
         items = [
@@ -220,7 +264,16 @@ class ReportGenerator:
 
     def _tables(self, facts: dict[str, Any]) -> list[dict[str, Any]]:
         tables = []
-        for table in (facts.get("product_analysis") or {}).get("tables", []):
+        intent = str((facts.get("query_plan") or {}).get("intent") or "")
+        if intent == "total_sales":
+            source_tables = list((facts.get("query_answer") or {}).get("tables", []))
+        else:
+            source_tables = [
+                *(facts.get("food_analysis") or {}).get("tables", []),
+                *(facts.get("product_analysis") or {}).get("tables", []),
+                *((facts.get("query_answer") or {}).get("tables", [])),
+            ]
+        for table in source_tables:
             if isinstance(table, dict) and table.get("rows"):
                 columns = [str(column) for column in table.get("columns", [])]
                 rows = [
@@ -243,6 +296,8 @@ class ReportGenerator:
 
     def _chart_svg(self, chart: dict[str, Any]) -> str:
         chart_type = str(chart.get("type", "bar")).lower()
+        if chart_type == "confusion_matrix":
+            return _confusion_matrix_svg(chart)
         if chart_type == "line":
             return _line_svg(chart)
         if chart_type in {"pie", "donut"}:
@@ -278,7 +333,7 @@ class ReportGenerator:
         ])))
         story.append(Spacer(1, 12))
         for chart in (facts.get("charts") or [])[:6]:
-            if not isinstance(chart.get("data"), list):
+            if not _chart_is_renderable(chart):
                 continue
             story.append(Paragraph(html.escape(str(chart.get("title", "Chart"))), styles["Heading2"]))
             drawing = _reportlab_chart_drawing(chart)
@@ -315,7 +370,7 @@ class ReportGenerator:
             lines.append(f"{item['label']}: {item['value']}")
         lines.append("")
         for chart in (facts.get("charts") or [])[:8]:
-            if not isinstance(chart.get("data"), list):
+            if not _chart_is_renderable(chart):
                 continue
             lines.append(str(chart.get("title", "Chart")))
             for row in (chart.get("data") or [])[:8]:
@@ -343,6 +398,35 @@ def _bar_svg(chart: dict[str, Any]) -> str:
         rows.append(f'<text x="0" y="{y + 10}" font-size="10" fill="#475569">{label}</text><rect x="150" y="{y}" width="{width:.1f}" height="16" rx="5" fill="{color}"/><text x="{155 + width:.1f}" y="{y + 12}" font-size="10" fill="#0f172a">{html.escape(_fmt(value))}</text>')
     height = max(80, 36 + len(data) * 28)
     return f'<svg viewBox="0 0 460 {height}" role="img">{"".join(rows)}</svg>'
+
+
+def _confusion_matrix_svg(chart: dict[str, Any]) -> str:
+    data = [row for row in (chart.get("data") or []) if isinstance(row, dict)]
+    actual_labels = sorted({str(row.get("actual")) for row in data})
+    predicted_labels = sorted({str(row.get("predicted")) for row in data})
+    counts = {(str(row.get("actual")), str(row.get("predicted"))): _num(row.get("count")) for row in data}
+    max_count = max(counts.values() or [1])
+    cell = 34
+    left = 100
+    top = 42
+    width = left + max(1, len(predicted_labels)) * cell + 20
+    height = top + max(1, len(actual_labels)) * cell + 34
+    parts = [
+        '<text x="0" y="18" font-size="11" fill="#475569">Actual vs predicted labels</text>',
+    ]
+    for col_idx, predicted in enumerate(predicted_labels):
+        x = left + col_idx * cell
+        parts.append(f'<text x="{x + 2}" y="34" font-size="8" fill="#475569">{html.escape(_truncate(predicted, 8))}</text>')
+    for row_idx, actual in enumerate(actual_labels):
+        y = top + row_idx * cell
+        parts.append(f'<text x="0" y="{y + 21}" font-size="8" fill="#475569">{html.escape(_truncate(actual, 16))}</text>')
+        for col_idx, predicted in enumerate(predicted_labels):
+            x = left + col_idx * cell
+            count = counts.get((actual, predicted), 0.0)
+            opacity = 0.12 + (count / max_count * 0.78 if max_count else 0)
+            parts.append(f'<rect x="{x}" y="{y}" width="{cell - 2}" height="{cell - 2}" rx="4" fill="#3b82f6" opacity="{opacity:.2f}"/>')
+            parts.append(f'<text x="{x + cell / 2 - 4}" y="{y + 20}" font-size="9" fill="#0f172a">{html.escape(_fmt(count))}</text>')
+    return f'<svg viewBox="0 0 {width} {height}" role="img">{"".join(parts)}</svg>'
 
 
 def _line_svg(chart: dict[str, Any]) -> str:
@@ -477,6 +561,7 @@ def _safe_facts(facts: dict[str, Any], xai_output: dict[str, Any]) -> dict[str, 
         "semantic_map": facts.get("semantic_map"),
         "business_metrics": facts.get("business_metrics"),
         "product_analysis": facts.get("product_analysis"),
+        "food_analysis": facts.get("food_analysis"),
         "data_quality": facts.get("data_quality"),
         "trends": facts.get("trends"),
         "prediction": facts.get("prediction"),
@@ -484,6 +569,56 @@ def _safe_facts(facts: dict[str, Any], xai_output: dict[str, Any]) -> dict[str, 
         "warnings": facts.get("warnings"),
         "recommendations": facts.get("recommendations"),
     }
+
+
+def _chart_is_renderable(chart: Any) -> bool:
+    if not isinstance(chart, dict):
+        return False
+    is_valid, _reason = validate_chart_spec(chart)
+    return is_valid
+
+
+def _is_food_dataset(facts: dict[str, Any]) -> bool:
+    semantic = facts.get("semantic_map") or {}
+    profile = facts.get("dataset_profile") or {}
+    return semantic.get("dataset_type") == "food_dataset" or profile.get("dataset_type") == "food_dataset"
+
+
+def _prediction_text(prediction: dict[str, Any]) -> str:
+    if prediction.get("status") != "complete":
+        return prediction.get("reason") or "Prediction/modeling was not run."
+    metrics = prediction.get("test_metrics") or {}
+    text = (
+        f"{prediction.get('selected_model')} was trained for {prediction.get('target_column')} "
+        f"as a {prediction.get('task_type')} task. Test metrics: {metrics}."
+    )
+    limitations = " ".join(str(item) for item in prediction.get("limitations", []))
+    return f"{text} {limitations}".strip()
+
+
+def _xai_text(xai: dict[str, Any], prediction: dict[str, Any]) -> str:
+    if not xai.get("top_features"):
+        return "XAI could not be generated because the model did not expose valid feature importance."
+    warnings = " ".join(str(item) for item in xai.get("warnings", []))
+    leakage = " ".join(str(item) for item in prediction.get("limitations", []) if "leakage" in str(item).lower())
+    return (
+        f"Method used: {xai.get('method')}. Top features: {', '.join(xai.get('top_features', []))}. "
+        f"{xai.get('plain_english_explanation', '')} {warnings} {leakage}"
+    ).strip()
+
+
+def _focused_sales_context(business: dict[str, Any]) -> str:
+    lines = []
+    if business.get("top_categories"):
+        leader = business["top_categories"][0]
+        lines.append(f"{leader.get('category')} is top category by revenue with {leader.get('revenue')}.")
+    if business.get("top_categories_by_transactions"):
+        leader = business["top_categories_by_transactions"][0]
+        lines.append(f"{leader.get('category')} is top category by transaction count with {leader.get('transaction_count')} rows.")
+    if business.get("top_regions"):
+        leader = business["top_regions"][0]
+        lines.append(f"{leader.get('region')} is top region by revenue with {leader.get('revenue')}.")
+    return " ".join(lines) or "Top category and region context were unavailable."
 
 
 def _manual_pdf(lines: list[str]) -> bytes:

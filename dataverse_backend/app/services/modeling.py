@@ -66,6 +66,7 @@ def _safe_features(df: pd.DataFrame, target_column: str, limitations: list[str])
             limitations.append(f"Excluded high-cardinality categorical column '{name}'.")
             continue
         features.append(name)
+    _append_leakage_warnings(df, target_column, features, limitations)
     return features
 
 
@@ -240,6 +241,11 @@ def _fit_models(df: pd.DataFrame, target_column: str, task_type: str, limitation
         "confusion_matrix": matrix_data,
         "limitations": limitations,
     }
+    if task_type == "classification" and selected_metrics.get("accuracy") == 1.0:
+        prediction["limitations"] = list(dict.fromkeys([
+            *prediction["limitations"],
+            "Perfect accuracy may indicate data leakage or overly deterministic category relationships. Validate on unseen external data.",
+        ]))
     transformed_names = _feature_names(selected_pipeline, features)
     bundle = TrainedModelBundle(
         model=selected_pipeline.named_steps["model"],
@@ -272,9 +278,30 @@ def _feature_importance(pipeline: Any, features: list[str]) -> list[dict[str, An
         values = np.abs(coef).mean(axis=0) if coef.ndim > 1 else np.abs(coef)
     if values is None:
         return []
-    total = float(values.sum()) or 1.0
+    values = np.asarray([value if np.isfinite(value) else 0.0 for value in values], dtype=float)
+    total = float(values.sum())
+    if total <= 0:
+        return []
     pairs = sorted(zip(names, values), key=lambda item: float(item[1]), reverse=True)[:20]
     return [{"feature": str(name), "importance": round(float(value) / total, 6)} for name, value in pairs]
+
+
+def _append_leakage_warnings(df: pd.DataFrame, target_column: str, features: list[str], limitations: list[str]) -> None:
+    target_norm = target_column.lower()
+    if target_norm != "category":
+        return
+    suspicious_names = {"food_name", "food_description", "main_ingredient", "cuisine"}
+    present = [feature for feature in features if feature.lower() in suspicious_names]
+    if not present:
+        return
+    limitations.append(
+        "Possible target leakage: food_name, food_description, main_ingredient, or cuisine can be highly predictive of category."
+    )
+    target = df[target_column].astype(str)
+    for feature in present:
+        grouped = df[[feature, target_column]].dropna().astype(str).groupby(feature)[target_column].nunique()
+        if not grouped.empty and int((grouped <= 1).sum()) / max(1, len(grouped)) >= 0.9:
+            limitations.append(f"Feature '{feature}' is nearly deterministic for category and may inflate classification accuracy.")
 
 
 def _safe_scalar(value: Any) -> Any:

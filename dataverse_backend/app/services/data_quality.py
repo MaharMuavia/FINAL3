@@ -1,6 +1,7 @@
 """Deterministic data quality, EDA, trends, correlations, and chart specs."""
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -255,28 +256,210 @@ def build_chart_specs(
         series = pd.to_numeric(df[col], errors="coerce").dropna()
         if series.empty:
             continue
-        counts, edges = np.histogram(series, bins=min(12, max(3, int(np.sqrt(len(series))))))
         charts.append({
             "type": "histogram",
             "title": f"Distribution of {col}",
-            "x": "bin",
-            "y": "count",
-            "data": [{"bin_start": round(float(edges[i]), 6), "bin_end": round(float(edges[i + 1]), 6), "count": int(count)} for i, count in enumerate(counts)],
+            "x_key": "bin",
+            "y_key": "count",
+            "data": _histogram_rows(series),
         })
     for col in (types["categorical_columns"] + types["text_columns"])[:3]:
         counts = df[col].astype(str).replace("nan", np.nan).dropna().value_counts().head(12).reset_index()
         counts.columns = [col, "count"]
         charts.append({"type": "bar", "title": f"Top {col}", "x": col, "y": "count", "data": counts.to_dict(orient="records")})
     for trend in trends.get("series", [])[:3]:
-        charts.append({"type": "line", "title": f"{trend['value_column']} over time", "x": trend["date_column"], "y": trend["value_column"], "data": trend.get("chart_data", [])})
+        charts.append({"type": "line", "title": f"{trend['value_column']} over time", "x_key": "date", "y_key": "value", "data": trend.get("chart_data", [])})
     if correlations.get("matrix"):
         charts.append({"type": "heatmap", "title": "Numeric correlations", "data": correlations["matrix"]})
     if outliers.get("by_column"):
         charts.append({"type": "boxplot", "title": "Outlier bounds", "data": outliers["by_column"]})
-    if xai.get("global_feature_importance"):
-        charts.append({"type": "feature_importance", "title": "Model feature importance", "data": xai["global_feature_importance"]})
+    if _valid_feature_importance(xai.get("global_feature_importance")):
+        charts.append({
+            "type": "feature_importance",
+            "title": "Model feature importance",
+            "x_key": "feature",
+            "y_key": "importance",
+            "data": xai["global_feature_importance"],
+        })
     if prediction.get("task_type") == "regression" and prediction.get("predictions_sample"):
-        charts.append({"type": "actual_vs_predicted", "title": "Actual vs predicted", "data": prediction["predictions_sample"]})
-    if prediction.get("task_type") == "classification" and prediction.get("confusion_matrix"):
-        charts.append({"type": "confusion_matrix", "title": "Confusion matrix", "data": prediction["confusion_matrix"]})
+        charts.append({
+            "type": "actual_vs_predicted",
+            "title": "Actual vs predicted",
+            "x_key": "row_index",
+            "y_key": "predicted",
+            "data": prediction["predictions_sample"],
+        })
+    if prediction.get("task_type") == "classification" and _valid_confusion_matrix(prediction.get("confusion_matrix")):
+        charts.append({
+            "type": "confusion_matrix",
+            "title": "Confusion matrix",
+            "x_key": "predicted",
+            "y_key": "count",
+            "series_key": "actual",
+            "data": prediction["confusion_matrix"],
+        })
     return json_safe(charts)
+
+
+def normalize_chart_specs(charts: list[dict[str, Any]], *, limit: int = 20) -> tuple[list[dict[str, Any]], list[str]]:
+    """Normalize and validate chart specs before any renderer sees them."""
+    normalized: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    priority = {"bar": 0, "line": 1, "donut": 2, "pie": 2, "histogram": 3, "feature_importance": 4, "confusion_matrix": 5}
+    ordered = sorted(
+        [chart for chart in charts if isinstance(chart, dict)],
+        key=lambda chart: (
+            priority.get(str(chart.get("type", "")).lower(), 6),
+            0 if any(token in str(chart.get("title", "")).lower() for token in ["product", "revenue", "category", "growth", "profit", "food", "cuisine", "ingredient"]) else 1,
+        ),
+    )
+    for chart in ordered:
+        if len(normalized) >= limit:
+            break
+        candidate = _normalize_chart_spec(chart)
+        is_valid, reason = validate_chart_spec(candidate)
+        if not is_valid:
+            warnings.append(f"Skipped invalid chart '{candidate.get('title', 'Chart')}': {reason}.")
+            continue
+        normalized.append(candidate)
+    return normalized, list(dict.fromkeys(warnings))
+
+
+def validate_chart_spec(chart: dict[str, Any]) -> tuple[bool, str]:
+    data = chart.get("data")
+    if not isinstance(data, list) or not data:
+        return False, "chart data is empty"
+    x_key = chart.get("x_key") or chart.get("x")
+    y_key = chart.get("y_key") or chart.get("y")
+    if not x_key or not y_key:
+        return False, "x_key or y_key is missing"
+    numeric_values: list[float] = []
+    for row in data:
+        if not isinstance(row, dict):
+            return False, "chart row is malformed"
+        if x_key not in row or y_key not in row:
+            return False, "x_key or y_key is missing from one or more rows"
+        if _invalid_label(row.get(x_key)):
+            return False, "label is blank or n/a"
+        number = _finite_number(row.get(y_key))
+        if number is None:
+            return False, "chart values must be numeric"
+        numeric_values.append(number)
+    if not numeric_values or all(value == 0 for value in numeric_values):
+        return False, "all chart values are zero"
+    chart_type = str(chart.get("type", "")).lower()
+    if chart_type == "feature_importance" and not _valid_feature_importance(data):
+        return False, "feature importance was unavailable"
+    if chart_type == "confusion_matrix" and not _valid_confusion_matrix(data):
+        return False, "confusion matrix data is malformed"
+    return True, ""
+
+
+def _normalize_chart_spec(chart: dict[str, Any]) -> dict[str, Any]:
+    chart_type = str(chart.get("type", "bar")).lower()
+    data = chart.get("data") or []
+    x_key = chart.get("x_key") or chart.get("x")
+    y_key = chart.get("y_key") or chart.get("y")
+    if chart_type == "feature_importance":
+        x_key = x_key or "feature"
+        y_key = y_key or "importance"
+    elif chart_type == "confusion_matrix":
+        x_key = x_key or "predicted"
+        y_key = y_key or "count"
+    elif chart_type == "histogram":
+        x_key = x_key or "bin"
+        y_key = y_key or "count"
+    return {
+        "type": chart_type,
+        "title": chart.get("title", "Chart"),
+        "data": data,
+        "x_key": x_key,
+        "y_key": y_key,
+        "series_key": chart.get("series_key"),
+    }
+
+
+def _histogram_rows(series: pd.Series) -> list[dict[str, Any]]:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if clean.empty:
+        return []
+    minimum = float(clean.min())
+    maximum = float(clean.max())
+    if minimum == maximum:
+        label = _format_bin_label(minimum, maximum)
+        return [{"bin": label, "count": int(len(clean))}]
+    integerish = bool((clean.dropna() % 1 == 0).all())
+    if integerish and minimum >= 0 and maximum - minimum <= 1200:
+        bin_width = max(1, int(math.ceil((maximum - minimum) / 10)))
+        is_calories = "calorie" in str(series.name).lower()
+        if is_calories:
+            bin_width = 60
+        start = int(math.floor(minimum))
+        rows = []
+        lower = start
+        first_bin = True
+        while lower <= maximum:
+            upper = lower + bin_width if is_calories and first_bin else lower + bin_width - 1
+            count = int(((clean >= lower) & (clean <= upper)).sum())
+            rows.append({"bin": f"{lower}-{upper}", "count": count})
+            lower = upper + 1
+            first_bin = False
+        return [row for row in rows if row["count"] > 0]
+    counts, edges = np.histogram(clean, bins=min(12, max(3, int(np.sqrt(len(clean))))))
+    return [
+        {"bin": _format_bin_label(float(edges[i]), float(edges[i + 1])), "count": int(count)}
+        for i, count in enumerate(counts)
+        if int(count) > 0
+    ]
+
+
+def _format_bin_label(start: float, end: float) -> str:
+    def _fmt_num(value: float) -> str:
+        return str(int(value)) if float(value).is_integer() else f"{value:.2f}".rstrip("0").rstrip(".")
+
+    return f"{_fmt_num(start)}-{_fmt_num(end)}"
+
+
+def _valid_feature_importance(data: Any) -> bool:
+    if not isinstance(data, list) or not data:
+        return False
+    values = []
+    for row in data:
+        if not isinstance(row, dict) or _invalid_label(row.get("feature")):
+            return False
+        number = _finite_number(row.get("importance"))
+        if number is None:
+            return False
+        values.append(number)
+    return bool(values) and not all(value == 0 for value in values)
+
+
+def _valid_confusion_matrix(data: Any) -> bool:
+    if not isinstance(data, list) or not data:
+        return False
+    total = 0.0
+    for row in data:
+        if not isinstance(row, dict):
+            return False
+        if _invalid_label(row.get("actual")) or _invalid_label(row.get("predicted")):
+            return False
+        count = _finite_number(row.get("count"))
+        if count is None or count < 0:
+            return False
+        total += count
+    return total > 0
+
+
+def _invalid_label(value: Any) -> bool:
+    if value is None:
+        return True
+    label = str(value).strip().lower()
+    return label in {"", "n/a", "na", "nan", "none", "null"}
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None

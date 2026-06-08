@@ -113,8 +113,13 @@ class ReportNarrator:
         semantic_map = facts.get("semantic_map") or {}
         business_metrics = facts.get("business_metrics") or {}
         product_analysis = facts.get("product_analysis") or {}
+        food_analysis = facts.get("food_analysis") or {}
         query_answer = facts.get("query_answer") or {}
+        query_plan = facts.get("query_plan") or {}
         is_ai_khata = semantic_map.get("dataset_type") in {"ai_khata_transaction_report", "business_transaction_dataset"}
+        is_food_dataset = semantic_map.get("dataset_type") == "food_dataset"
+        is_focused = str(query_plan.get("report_mode")) == "focused_answer_report"
+        intent = str(query_plan.get("intent") or "dataset_overview")
 
         key_insights = [
             f"Dataset contains {profile.get('row_count', 0)} rows and {profile.get('column_count', 0)} columns.",
@@ -148,6 +153,8 @@ class ReportNarrator:
                 key_insights.append(f"{key}: {report_summary[key]}.")
         if product_analysis.get("insights"):
             key_insights.extend(product_analysis["insights"])
+        if food_analysis.get("warnings"):
+            key_insights.append(food_analysis["warnings"][0])
         if business_summary and is_ai_khata:
             key_insights.append(
                 "Business summary: "
@@ -156,6 +163,15 @@ class ReportNarrator:
                 f"udhaar Rs {business_summary.get('udhaar_outstanding', 0)}, "
                 f"net profit Rs {business_summary.get('net_profit', 0)}."
             )
+        if business_metrics.get("top_categories"):
+            top_category = business_metrics["top_categories"][0]
+            key_insights.append(f"{top_category.get('category')} is top category by revenue with {top_category.get('revenue')}.")
+        if business_metrics.get("top_categories_by_transactions"):
+            top_category_count = business_metrics["top_categories_by_transactions"][0]
+            key_insights.append(f"{top_category_count.get('category')} is top category by transaction count with {top_category_count.get('transaction_count')} rows.")
+        if business_metrics.get("top_regions"):
+            top_region = business_metrics["top_regions"][0]
+            key_insights.append(f"{top_region.get('region')} is top region by revenue with {top_region.get('revenue')}.")
 
         warnings = list(dict.fromkeys((quality.get("warnings") or []) + (business_metrics.get("data_limitations") or []) + (prediction.get("limitations") or []) + (xai.get("warnings") or [])))
         recommendations = [
@@ -163,6 +179,12 @@ class ReportNarrator:
             "Validate inferred target columns and model drivers with domain expertise.",
             "Render the chart-ready JSON specs to inspect distributions, trends, correlations, and model behavior.",
         ]
+        if is_food_dataset:
+            recommendations = [
+                "Use frequency analysis for catalog composition, not sales performance.",
+                "Collect order quantity, revenue, cost, and timestamps before asking sales or profit questions.",
+                "Validate any category model on external food items before trusting perfect accuracy.",
+            ]
         if business_summary and is_ai_khata:
             recommendations.append("For AI Khata reports, calculate revenue only from SALES rows; keep EXPENSE and UDHAAR separate.")
         recommendations.extend(product_analysis.get("recommendations") or [])
@@ -178,6 +200,25 @@ class ReportNarrator:
         ]
         if prediction.get("status") == "complete":
             next_questions.append("Should the model be validated on a time-based holdout or external dataset?")
+
+        if is_focused and not is_food_dataset and intent != "full_report":
+            sections = {
+                "Executive Summary": query_answer.get("answer") or " ".join(key_insights[:4]),
+                "Dataset Overview": f"Rows: {profile.get('row_count', 0)}. Columns: {profile.get('column_count', 0)}. Type: {semantic_map.get('dataset_type', profile.get('dataset_type', 'generic_tabular'))}.",
+                "Data Quality": f"Missing cells: {quality.get('missing_cells', 0)}. Duplicate rows: {quality.get('duplicate_rows', 0)}. Quality score: {quality.get('data_quality_score', 'unknown')}.",
+                "Limitations": " ".join(warnings) if warnings else "No major automated warnings.",
+                "Recommendations": " ".join((query_answer.get("recommendations") or recommendations)[:3]),
+                "Next Questions": " ".join((query_answer.get("follow_up_ideas") or next_questions)[:3]),
+            }
+            return {
+                "executive_summary": sections["Executive Summary"],
+                "report_sections": sections,
+                "key_insights": key_insights[:6],
+                "recommendations": query_answer.get("recommendations") or recommendations[:3],
+                "warnings": warnings,
+                "next_questions": query_answer.get("follow_up_ideas") or next_questions[:3],
+                "narration_provider": "deterministic",
+            }
 
         sections = {
             "Executive Summary": " ".join(key_insights),
@@ -208,6 +249,27 @@ class ReportNarrator:
             "Recommendations": " ".join(recommendations),
             "Next Questions": " ".join(next_questions),
         }
+        if is_food_dataset:
+            sections = {
+                "Executive Summary": " ".join(key_insights),
+                "Dataset Overview": (
+                    f"Rows: {profile.get('row_count', 0)}. Columns: {profile.get('column_count', 0)}. "
+                    "Detected as a food classification / food catalog dataset."
+                ),
+                "Data Quality": f"Missing cells: {quality.get('missing_cells', 0)}. Duplicate rows: {quality.get('duplicate_rows', 0)}.",
+                "Dataset Limitations": food_analysis.get("warnings", [""])[0],
+                "Food Frequency Analysis": " ".join(food_analysis.get("insights", [])) or "Food frequency analysis was unavailable.",
+                "Category Distribution": _table_summary(food_analysis, "Most common category"),
+                "Cuisine Distribution": _table_summary(food_analysis, "Most common cuisine"),
+                "Main Ingredient Distribution": _table_summary(food_analysis, "Most common main ingredient"),
+                "Spice Level Distribution": _table_summary(food_analysis, "Spice level distribution"),
+                "Calories Statistics": json.dumps(food_analysis.get("calories_stats") or {}, default=str),
+                "Prediction/Model Summary": _prediction_summary(prediction),
+                "XAI Explanation": _xai_summary(xai, prediction),
+                "Risks and Limitations": " ".join(warnings) if warnings else food_analysis.get("warnings", ["No major automated warnings."])[0],
+                "Recommendations": " ".join(recommendations),
+                "Next Questions": " ".join(food_analysis.get("next_questions") or next_questions),
+            }
 
         return {
             "executive_summary": sections["Executive Summary"],
@@ -225,3 +287,36 @@ def _cap(value: Any, max_chars: int = 4000) -> Any:
     if len(text) <= max_chars:
         return value
     return {"truncated": True, "preview": text[:max_chars]}
+
+
+def _table_summary(food_analysis: dict[str, Any], title: str) -> str:
+    table = next((item for item in food_analysis.get("tables", []) if item.get("title") == title), None)
+    rows = table.get("rows", []) if isinstance(table, dict) else []
+    if not rows:
+        return f"{title} was unavailable."
+    first = rows[0]
+    label_key = next((key for key in first.keys() if key != "count"), "value")
+    return f"{first.get(label_key)} is the leading value with {first.get('count')} rows."
+
+
+def _prediction_summary(prediction: dict[str, Any]) -> str:
+    if prediction.get("status") != "complete":
+        return prediction.get("reason") or "Prediction/modeling was not run."
+    metrics = prediction.get("test_metrics") or {}
+    summary = (
+        f"{prediction.get('selected_model')} was trained for {prediction.get('target_column')} "
+        f"as a {prediction.get('task_type')} task. Test metrics: {metrics}."
+    )
+    limitations = " ".join(str(item) for item in prediction.get("limitations", []))
+    return f"{summary} {limitations}".strip()
+
+
+def _xai_summary(xai: dict[str, Any], prediction: dict[str, Any]) -> str:
+    if not xai.get("top_features"):
+        return "XAI could not be generated because the model did not expose valid feature importance."
+    warnings = " ".join(str(item) for item in xai.get("warnings", []))
+    leakage = " ".join(str(item) for item in prediction.get("limitations", []) if "leakage" in str(item).lower())
+    return (
+        f"Method used: {xai.get('method')}. Top features: {', '.join(xai.get('top_features', []))}. "
+        f"{xai.get('plain_english_explanation', '')} {warnings} {leakage}"
+    ).strip()

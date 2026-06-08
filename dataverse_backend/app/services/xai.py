@@ -54,10 +54,15 @@ def explain_model(bundle: TrainedModelBundle | None, prediction: dict[str, Any],
 
     top_features = [item["feature"] for item in global_importance[:5]]
     explanation = (
-        "The model is primarily influenced by " + ", ".join(top_features) + "."
+        f"Method used: {method}. The model is primarily influenced by " + ", ".join(top_features) + "."
         if top_features
-        else "The model did not expose usable feature importance."
+        else "XAI could not be generated because the model did not expose valid feature importance."
     )
+    if not top_features:
+        warnings.append("Feature importance was unavailable.")
+    for item in prediction.get("limitations", []):
+        if "leakage" in str(item).lower() and item not in warnings:
+            warnings.append(str(item))
     return {
         "status": "success" if global_importance and method == "shap_tree_explainer" else "fallback" if global_importance else "limited",
         "method": method,
@@ -71,7 +76,7 @@ def explain_model(bundle: TrainedModelBundle | None, prediction: dict[str, Any],
 
 def _fallback(importance: list[dict[str, Any]], warnings: list[str], reason: str | None = None) -> dict[str, Any]:
     top_features = [item["feature"] for item in importance[:5]]
-    skipped_message = "Explainability was skipped because no trained model was available."
+    skipped_message = "XAI could not be generated because the model did not expose valid feature importance."
     if reason:
         skipped_message = f"Prediction and XAI were skipped. {reason}"
     return {
@@ -81,10 +86,10 @@ def _fallback(importance: list[dict[str, Any]], warnings: list[str], reason: str
         "top_features": top_features,
         "local_explanations": [],
         "plain_english_explanation": (
-            "Feature importance is used as the explanation fallback. Top drivers: "
+            "Method used: feature importance fallback. Top features: "
             + ", ".join(top_features)
             if top_features
             else skipped_message
         ),
-        "warnings": warnings,
+        "warnings": list(dict.fromkeys(warnings + ([] if top_features else ["Feature importance was unavailable."]))),
     }

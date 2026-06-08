@@ -80,12 +80,23 @@ export type AgentSummary = {
   steps?: AgentStep[];
 };
 
+export type XaiPayload = {
+  status?: string;
+  method?: string | null;
+  global_feature_importance?: Array<{ feature: string; importance: number }>;
+  top_features?: string[];
+  local_explanations?: Array<{ sample_index: number; top_contributors: Array<{ feature: string; shap_value: number }> }>;
+  plain_english_explanation?: string;
+  warnings?: string[];
+};
+
 export type AnalysisResponse = {
   session_id: string;
   dataset_id: string;
   title: string;
   agents: AgentSummary[];
   answer: string;
+  kpis?: Array<{ label: string; value: string | number | null }>;
   tables?: TablePayload[];
   charts?: ChartPayload[];
   warnings?: string[];
@@ -95,6 +106,7 @@ export type AnalysisResponse = {
     html_url?: string;
     pdf_url?: string;
   } | null;
+  xai?: XaiPayload;
 };
 
 export type UploadResponse = {

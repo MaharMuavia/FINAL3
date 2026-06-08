@@ -200,7 +200,19 @@ class SemanticMapper:
         name = normalize_name(column)
         series = df[column]
         unique_ratio = series.nunique(dropna=True) / max(1, len(series))
-        if name in {"id", "uuid"} or name.endswith("_id") or name.endswith("id"):
+        if "invoice" in name and "date" in name:
+            return "invoice_date"
+        if "order" in name and "date" in name:
+            return "order_date"
+        if ("transaction" in name or name in {"date", "created_at", "posted_date"}) and "date" in name:
+            return "transaction_date"
+        if _date_parse_hint(series)["looks_like_date"]:
+            return "transaction_date"
+        if name in {"id", "uuid", "guid"} or name.endswith("_id") or name.startswith("id_"):
+            if "product" in name or name == "sku":
+                return "product"
+            if "store" in name or "branch" in name or "shop" in name:
+                return "store"
             if "customer" in name:
                 return "customer_id"
             if "order" in name:
@@ -210,15 +222,7 @@ class SemanticMapper:
             return "ignore_identifier"
         if unique_ratio >= 0.9 and not pd.api.types.is_numeric_dtype(series) and len(series) >= 10:
             return "ignore_identifier"
-        if "invoice" in name and "date" in name:
-            return "invoice_date"
-        if "order" in name and "date" in name:
-            return "order_date"
-        if ("transaction" in name or name in {"date", "created_at", "posted_date"}) and "date" in name:
-            return "transaction_date"
-        if _date_parse_hint(series)["looks_like_date"]:
-            return "transaction_date"
-        if any(token in name for token in ["transaction_type", "txn_type", "payment_type"]) or name in {"type", "category"} and _has_transaction_values(series):
+        if any(token in name for token in ["transaction_type", "txn_type", "payment_type"]) or (name in {"type", "category"} and _has_transaction_values(series)):
             return "transaction_type"
         if any(token in name for token in ["product", "item", "sku", "article", "food", "dish", "meal", "menu_item"]):
             return "product"
@@ -264,6 +268,21 @@ class SemanticMapper:
     def _dataset_type(self, df: pd.DataFrame, roles: dict[str, str], filename: str | None) -> tuple[str, float]:
         role_values = set(roles.values())
         filename_norm = normalize_name(filename or "")
+        column_names = {normalize_name(column) for column in df.columns}
+        retail_signals = {
+            "order_id",
+            "order_datetime",
+            "store_id",
+            "region",
+            "city",
+            "product_id",
+            "category",
+            "unit_price",
+            "quantity",
+            "total_sales",
+            "profit",
+        }
+        retail_signal_count = len(retail_signals & column_names)
         if {"invoice_date", "invoice_id"} & role_values or "invoice" in filename_norm:
             return "invoice_sales", 0.88
         if "sku" in " ".join(normalize_name(column) for column in df.columns) or "ecommerce" in filename_norm:
@@ -278,6 +297,8 @@ class SemanticMapper:
             return "transaction_ledger", 0.88
         if "quantity" in role_values and "unit_price" in role_values and "product" in role_values:
             return "mart_sales", 0.84
+        if retail_signal_count >= 7 and "sales_revenue" in role_values and "profit" in role_values:
+            return "retail_sales", 0.9
         if "sales_revenue" in role_values and "product" in role_values:
             return "retail_sales", 0.82
         if "product" in role_values and any("stock" in normalize_name(column) or "inventory" in normalize_name(column) for column in df.columns):
@@ -285,7 +306,7 @@ class SemanticMapper:
         food_schema = " ".join(normalize_name(column) for column in df.columns)
         if any(token in food_schema for token in ["food", "dish", "meal", "menu", "ingredient", "cuisine", "spice", "calorie"]):
             return "food_dataset", 0.82
-        if "customer" in role_values and ("sales_revenue" in role_values or "net_sales" in role_values):
+        if "customer" in role_values and ("sales_revenue" in role_values or "net_sales" in role_values) and retail_signal_count < 5:
             return "customer_sales", 0.78
         return "generic_tabular", 0.35
 

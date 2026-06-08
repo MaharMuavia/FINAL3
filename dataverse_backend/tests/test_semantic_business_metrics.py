@@ -165,3 +165,144 @@ def test_food_dataset_is_not_labeled_generic():
     assert semantic_map["dataset_type"] == "food_dataset"
     assert profile["dataset_type"] == "food_dataset"
     assert profile["column_roles"]["food_name"] == "product"
+
+
+def test_food_catalog_report_uses_frequency_not_sales_language():
+    rows = []
+    categories = ["Breakfast", "Lunch", "Dinner", "Dessert"]
+    ingredients = ["Egg", "Chicken", "Rice", "Chocolate"]
+    cuisines = ["American", "Pakistani", "Italian"]
+    spices = ["Low", "Medium", "High"]
+    for index in range(60):
+        rows.append(
+            {
+                "food_name": f"Food {index % 8}",
+                "food_description": f"Description {index % 8}",
+                "main_ingredient": ingredients[index % len(ingredients)],
+                "cuisine": cuisines[index % len(cuisines)],
+                "spice_level": spices[index % len(spices)],
+                "calories": 200 + (index % 10) * 60,
+                "category": categories[index % len(categories)],
+            }
+        )
+    df = pd.DataFrame(rows)
+
+    report = AnalysisPipeline().run_full_analysis(
+        df,
+        query="What is the most sold product?",
+        target_column="category",
+        task_type="classification",
+        run_predictions=True,
+        run_xai=True,
+        use_llm=False,
+        filename="food_dataset_extended (1).csv",
+    )
+
+    assert report["semantic_map"]["dataset_type"] == "food_dataset"
+    assert report["query_answer"]["answer"].startswith("This dataset does not contain sales or quantity columns")
+    assert any("most-sold product analysis" in warning for warning in report["warnings"])
+    assert any(chart["title"] == "Most frequent food item" for chart in report["charts"])
+    assert any(chart["title"] == "Distribution of calories" for chart in report["charts"])
+    calories_chart = next(chart for chart in report["charts"] if chart["title"] == "Distribution of calories")
+    assert calories_chart["x_key"] == "bin"
+    assert all(row["bin"] and str(row["bin"]).lower() != "n/a" for row in calories_chart["data"])
+    assert all(str(row[chart["x_key"]]).strip().lower() not in {"", "n/a", "nan", "none"} for chart in report["charts"] for row in chart["data"])
+    assert not any(chart["title"] == "Model feature importance" and not chart.get("x_key") for chart in report["charts"])
+    assert "most sold product" not in report["executive_summary"].lower()
+    assert "Most frequent food item" in [table["title"] for table in report["product_analysis"]["tables"]]
+    assert any("leakage" in warning.lower() or "Perfect accuracy may indicate" in warning for warning in report["warnings"])
+
+
+def test_retail_dataset_prefers_retail_sales_over_customer_sales():
+    df = pd.DataFrame(
+        {
+            "order_id": ["ORD_1", "ORD_2", "ORD_3", "ORD_4"],
+            "order_datetime": ["2026-01-01 10:00:00", "2026-01-02 10:00:00", "2026-01-03 10:00:00", "2026-01-04 10:00:00"],
+            "store_id": ["STORE_1", "STORE_1", "STORE_2", "STORE_2"],
+            "region": ["Punjab", "Punjab", "Sindh", "Sindh"],
+            "city": ["Lahore", "Lahore", "Karachi", "Karachi"],
+            "product_id": ["PROD_1", "PROD_2", "PROD_1", "PROD_3"],
+            "category": ["Electronics", "Grocery", "Electronics", "Fashion"],
+            "subcategory": ["Phones", "Staples", "Phones", "Shoes"],
+            "unit_price": [200, 20, 200, 80],
+            "quantity": [2, 5, 1, 3],
+            "discount": [0, 1, 0, 2],
+            "total_sales": [400, 99, 200, 238],
+            "profit": [60, 15, 30, 35.7],
+            "customer_id": ["C1", "C2", "C3", "C4"],
+            "customer_type": ["Member", "Guest", "Member", "Guest"],
+            "payment_method": ["Card", "Cash", "Card", "Cash"],
+            "online_order": [True, False, True, False],
+            "stockout_flag": [False, False, True, False],
+            "weekday": ["Mon", "Tue", "Wed", "Thu"],
+            "month": ["Jan", "Jan", "Jan", "Jan"],
+        }
+    )
+
+    semantic_map = SemanticMapper().map_dataframe(df, filename="retail_mart_final.csv")
+
+    assert semantic_map["dataset_type"] in {"retail_sales", "mart_sales"}
+    assert semantic_map["dataset_type"] != "customer_sales"
+    assert semantic_map["column_roles"]["product_id"] == "product"
+    assert semantic_map["column_roles"]["store_id"] == "store"
+    assert semantic_map["column_roles"]["order_datetime"] == "order_date"
+    assert semantic_map["metrics"]["date"]["source_column"] == "order_datetime"
+
+
+def test_predict_sales_uses_regression_target_not_category_classifier():
+    rows = []
+    for idx in range(60):
+        quantity = 1 + (idx % 4)
+        unit_price = 100 + (idx % 6) * 10
+        rows.append(
+            {
+                "order_id": f"ORD_{idx:05d}",
+                "order_datetime": f"2026-01-{(idx % 28) + 1:02d} 10:00:00",
+                "store_id": f"STORE_{idx % 3}",
+                "region": ["Punjab", "Sindh", "KPK"][idx % 3],
+                "city": f"City_{idx % 4}",
+                "product_id": f"PROD_{idx % 8}",
+                "category": ["Electronics", "Grocery", "Fashion"][idx % 3],
+                "subcategory": f"Sub_{idx % 5}",
+                "unit_price": unit_price,
+                "quantity": quantity,
+                "discount": 0,
+                "total_sales": quantity * unit_price,
+                "profit": round(quantity * unit_price * 0.15, 2),
+                "customer_id": f"CUST_{idx:05d}",
+                "customer_type": "Member" if idx % 2 == 0 else "Guest",
+                "payment_method": "Card",
+                "online_order": idx % 2 == 0,
+                "stockout_flag": False,
+                "weekday": "Mon",
+                "month": "Jan",
+            }
+        )
+    df = pd.DataFrame(rows)
+
+    report = AnalysisPipeline().run_full_analysis(df, query="predict sales", use_llm=False)
+
+    assert report["query_plan"]["intent"] == "prediction"
+    assert report["prediction"]["task_type"] == "regression"
+    assert str(report["prediction"]["target_column"]).lower() == "total_sales"
+
+
+def test_top_products_query_normalizes_product_id_keys_for_quantity_rankings():
+    df = pd.DataFrame(
+        {
+            "order_id": ["ORD_1", "ORD_2", "ORD_3", "ORD_4"],
+            "order_datetime": ["2026-01-01 10:00:00", "2026-01-02 10:00:00", "2026-01-03 10:00:00", "2026-01-04 10:00:00"],
+            "product_id": ["PROD_6382", "PROD_1000", "PROD_6382", "PROD_2000"],
+            "category": ["Electronics", "Grocery", "Electronics", "Fashion"],
+            "region": ["Punjab", "Punjab", "Sindh", "Sindh"],
+            "quantity": [4, 1, 3, 2],
+            "total_sales": [400, 50, 360, 180],
+            "profit": [60, 8, 54, 27],
+        }
+    )
+
+    _semantic_map, metrics, query_plan, query_answer = _mapped_metrics(df, "retail_mart_final.csv", query="top products")
+
+    assert query_plan["intent"] == "top_product"
+    assert metrics["top_products_by_quantity"][0] == {"product": "PROD_6382", "quantity": 7}
+    assert "Top product by quantity is PROD_6382 with 7 units." in query_answer["answer"]

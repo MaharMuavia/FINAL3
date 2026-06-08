@@ -41,6 +41,7 @@ def calculate_business_metrics(df: pd.DataFrame, semantic_map: dict[str, Any]) -
     product_col = _metric_col(metrics.get("product"))
     category_col = _metric_col(metrics.get("category"))
     customer_col = _metric_col(metrics.get("customer"))
+    region_col = _metric_col(metrics.get("region"))
 
     if not date_col:
         limitations.append("Date column missing; skipped time trends.")
@@ -59,6 +60,9 @@ def calculate_business_metrics(df: pd.DataFrame, semantic_map: dict[str, Any]) -
     top_products = _group_by_dimension(df, product_col, revenue_series, "revenue") if product_col and revenue_series is not None else []
     top_categories = _group_by_dimension(df, category_col, revenue_series, "revenue") if category_col and revenue_series is not None else []
     top_customers = _group_by_dimension(df, customer_col, revenue_series, "revenue") if customer_col and revenue_series is not None else []
+    top_regions = _group_by_dimension(df, region_col, revenue_series, "revenue") if region_col and revenue_series is not None else []
+    top_products_by_quantity = _group_by_dimension(df, product_col, quantity_series, "quantity") if product_col and quantity_series is not None else []
+    top_categories_by_transactions = _count_by_dimension(df, category_col, "category") if category_col else []
 
     revenue_by_category = top_categories
     revenue_by_product = top_products
@@ -87,6 +91,9 @@ def calculate_business_metrics(df: pd.DataFrame, semantic_map: dict[str, Any]) -
         "top_products": top_products,
         "top_categories": top_categories,
         "top_customers": top_customers,
+        "top_regions": top_regions,
+        "top_products_by_quantity": top_products_by_quantity,
+        "top_categories_by_transactions": top_categories_by_transactions,
         "revenue_by_date": revenue_by_date,
         "revenue_by_month": revenue_by_month,
         "revenue_by_category": revenue_by_category,
@@ -170,9 +177,16 @@ def compute_product_trends(
             "series_key": "product",
             "data": trend_rows,
         })
-    if growth_rows:
-        charts.append({"type": "bar", "title": "Fastest Growing Products", "x_key": "product", "y_key": "absolute_growth", "data": growth_rows[:10]})
-        tables.append({"title": "Product Growth", "columns": ["product", "first_period_revenue", "last_period_revenue", "absolute_growth", "pct_growth"], "rows": growth_rows[:10]})
+    positive_growth = [row for row in growth_rows if float(row.get("absolute_growth") or 0) > 0 and row.get("meaningful_periods")]
+    negative_growth = [row for row in growth_rows if float(row.get("absolute_growth") or 0) < 0 and row.get("meaningful_periods")]
+    if positive_growth:
+        charts.append({"type": "bar", "title": "Fastest Growing Products", "x_key": "product", "y_key": "absolute_growth", "data": positive_growth[:10]})
+        tables.append({"title": "Product Growth", "columns": ["product", "first_period_revenue", "last_period_revenue", "absolute_growth", "pct_growth"], "rows": positive_growth[:10]})
+    elif negative_growth:
+        charts.append({"type": "bar", "title": "Declining Products", "x_key": "product", "y_key": "absolute_growth", "data": negative_growth[:10]})
+        tables.append({"title": "Declining Products", "columns": ["product", "first_period_revenue", "last_period_revenue", "absolute_growth", "pct_growth"], "rows": negative_growth[:10]})
+    elif top_revenue and date_col:
+        warnings.append("Product growth needs at least two meaningful periods with non-zero change; growth chart was skipped.")
 
     share_source = category_performance or top_revenue
     if share_source:
@@ -226,24 +240,99 @@ def answer_business_query(query_plan: dict[str, Any], business_metrics: dict[str
     dimensions = query_plan.get("dimensions") or []
     warnings = list(business_metrics.get("data_limitations") or [])
 
-    if intent == "revenue_trend" or ("month" in dimensions and metric == "revenue"):
+    if intent == "total_sales":
+        top_category_revenue = (business_metrics.get("top_categories") or [{}])[0]
+        top_region_revenue = (business_metrics.get("top_regions") or [{}])[0]
+        answer = (
+            f"Total sales are {business_metrics.get('total_revenue')} across {business_metrics.get('transaction_count')} transactions. "
+            f"Total quantity sold is {business_metrics.get('total_quantity')} and total profit is {business_metrics.get('total_profit')}, "
+            f"giving a gross margin of {business_metrics.get('gross_margin')}%."
+        )
+        kpis = build_kpi_cards(business_metrics)
+        summary_rows = [
+            {"metric": "Top category by revenue", "value": top_category_revenue.get("category"), "amount": top_category_revenue.get("revenue")},
+            {"metric": "Top region by revenue", "value": top_region_revenue.get("region"), "amount": top_region_revenue.get("revenue")},
+        ]
+        summary_rows = [row for row in summary_rows if row.get("value")]
+        return {
+            "intent": intent,
+            "answer": answer,
+            "kpis": kpis,
+            "tables": [{"title": "Total Sales Overview", "columns": ["metric", "value", "amount"], "rows": summary_rows}] if summary_rows else [],
+            "charts": [],
+            "warnings": warnings,
+            "recommendations": [
+                "Ask for revenue by month, category performance, or top products to drill into the drivers.",
+            ],
+            "follow_up_ideas": ["Show revenue by month.", "Show category performance.", "Show top products."],
+        }
+
+    if intent in {"revenue_by_month", "revenue_trend"} or ("month" in dimensions and metric == "revenue"):
         rows = business_metrics.get("revenue_by_month") or []
         answer = "No revenue by month could be calculated."
         if len(rows) == 1:
             answer = f"Revenue is {rows[0]['revenue']:,} in {rows[0]['period']}. Only one period is available, so a trend cannot be reliably detected."
         elif len(rows) >= 2:
             answer = f"Revenue is available across {len(rows)} monthly periods."
-        return _query_result("revenue_trend", answer, ["period", "revenue"], rows, "Revenue by month", "line", "period", "revenue", warnings)
+        return _query_result("revenue_by_month", answer, ["period", "revenue"], rows, "Revenue by month", "line", "period", "revenue", warnings)
 
-    if intent == "top_products":
+    if intent in {"top_product", "top_products"}:
         rows = business_metrics.get("top_products") or []
-        answer = f"{rows[0]['product']} leads with revenue {rows[0]['revenue']:,}." if rows else "Product ranking is unavailable."
-        return _query_result("top_products", answer, ["product", "revenue"], rows, "Top products", "bar", "product", "revenue", warnings)
+        quantity_rows = business_metrics.get("top_products_by_quantity") or []
+        if rows and quantity_rows:
+            answer = (
+                f"Top product by revenue is {rows[0]['product']} with {rows[0]['revenue']}. "
+                f"Top product by quantity is {quantity_rows[0]['product']} with {quantity_rows[0]['quantity']} units."
+            )
+        else:
+            answer = "Product ranking is unavailable."
+        tables = []
+        if rows:
+            tables.append({"title": "Top products by revenue", "columns": ["product", "revenue"], "rows": rows})
+        if quantity_rows:
+            tables.append({"title": "Top products by quantity", "columns": ["product", "quantity"], "rows": quantity_rows})
+        charts = []
+        if rows:
+            charts.append({"type": "bar", "title": "Top products by revenue", "data": rows, "x_key": "product", "y_key": "revenue"})
+        if quantity_rows:
+            charts.append({"type": "bar", "title": "Top products by quantity", "data": quantity_rows, "x_key": "product", "y_key": "quantity"})
+        return {
+            "intent": "top_product",
+            "answer": answer,
+            "kpis": build_kpi_cards(business_metrics),
+            "tables": tables,
+            "charts": charts,
+            "warnings": warnings,
+            "recommendations": ["Compare top products by revenue, quantity, and profit before making assortment changes."],
+            "follow_up_ideas": ["Show product profitability.", "Show product trend by month."],
+        }
 
     if intent == "category_performance":
         rows = business_metrics.get("top_categories") or []
-        answer = f"{rows[0]['category']} leads with revenue {rows[0]['revenue']:,}." if rows else "Category performance is unavailable."
-        return _query_result("category_performance", answer, ["category", "revenue"], rows, "Category performance", "bar", "category", "revenue", warnings)
+        transaction_rows = business_metrics.get("top_categories_by_transactions") or []
+        answer = "Category performance is unavailable."
+        if rows:
+            answer = f"{rows[0]['category']} is top category by revenue with {rows[0]['revenue']}."
+            if transaction_rows:
+                answer += f" {transaction_rows[0]['category']} is top category by transaction count with {transaction_rows[0]['transaction_count']} rows."
+        return {
+            "intent": intent,
+            "answer": answer,
+            "kpis": build_kpi_cards(business_metrics),
+            "tables": [
+                {"title": "Category revenue", "columns": ["category", "revenue"], "rows": rows},
+                {"title": "Category transaction count", "columns": ["category", "transaction_count"], "rows": transaction_rows},
+            ],
+            "charts": [{"type": "bar", "title": "Category revenue", "data": rows, "x_key": "category", "y_key": "revenue"}] if rows else [],
+            "warnings": warnings,
+            "recommendations": ["Use revenue and transaction count together so high-frequency low-ticket categories do not get confused with top revenue categories."],
+            "follow_up_ideas": ["Show category profit.", "Show category share by revenue."],
+        }
+
+    if intent == "region_performance":
+        rows = business_metrics.get("top_regions") or []
+        answer = f"{rows[0]['region']} is top region by revenue with {rows[0]['revenue']}." if rows else "Region performance is unavailable."
+        return _query_result(intent, answer, ["region", "revenue"], rows, "Region revenue", "bar", "region", "revenue", warnings)
 
     if intent == "customer_analysis":
         rows = business_metrics.get("top_customers") or []
@@ -255,11 +344,20 @@ def answer_business_query(query_plan: dict[str, Any], business_metrics: dict[str
         answer = f"Total expenses are {business_metrics.get('total_expenses')}." if business_metrics.get("total_expenses") is not None else "Expense analysis is unavailable."
         return _query_result("expense_analysis", answer, ["expense_type", "expense"], rows, "Expense summary", "bar", "expense_type", "expense", warnings)
 
-    if intent == "profit_analysis":
+    if intent in {"profit_summary", "profit_analysis"}:
         summary = business_metrics.get("profit_summary") or {}
         rows = [{"metric": key, "value": value} for key, value in summary.items()]
         answer = f"Total profit is {summary.get('total_profit')} with gross margin {summary.get('gross_margin_pct')}%."
-        return _query_result("profit_analysis", answer, ["metric", "value"], rows, "Profit summary", "bar", "metric", "value", warnings)
+        return {
+            "intent": "profit_summary",
+            "answer": answer,
+            "kpis": build_kpi_cards(business_metrics),
+            "tables": [{"title": "Profit summary", "columns": ["metric", "value"], "rows": rows}],
+            "charts": [],
+            "warnings": warnings,
+            "recommendations": ["Compare gross margin with category and region profitability before changing pricing or discount strategy."],
+            "follow_up_ideas": ["Show profit by category.", "Show profit by region."],
+        }
 
     rows = [
         {"metric": "total_revenue", "value": business_metrics.get("total_revenue")},
@@ -271,18 +369,38 @@ def answer_business_query(query_plan: dict[str, Any], business_metrics: dict[str
         f"Detected {business_metrics.get('dataset_type')} data. "
         f"Total revenue is {business_metrics.get('total_revenue')}; transactions: {business_metrics.get('transaction_count')}."
     )
-    return _query_result("dataset_overview", answer, ["metric", "value"], rows, "Business overview", "bar", "metric", "value", warnings)
+    return {
+        "intent": "dataset_overview",
+        "answer": answer,
+        "kpis": build_kpi_cards(business_metrics),
+        "tables": [{"title": "Business overview", "columns": ["metric", "value"], "rows": rows}],
+        "charts": [],
+        "warnings": warnings,
+        "recommendations": ["Ask for total sales, revenue by month, top products, category performance, or a full report to go deeper."],
+        "follow_up_ideas": ["Show revenue by month.", "Which products perform best?", "Show profit summary."],
+    }
 
 
 def _query_result(intent: str, answer: str, columns: list[str], rows: list[dict[str, Any]], title: str, chart_type: str, x_key: str, y_key: str, warnings: list[str]) -> dict[str, Any]:
     return {
         "intent": intent,
         "answer": answer,
+        "kpis": [],
         "tables": [{"title": title, "columns": columns, "rows": rows}],
         "charts": [{"type": chart_type, "title": title, "data": rows, "x_key": x_key, "y_key": y_key}] if rows else [],
         "warnings": warnings,
         "follow_up_ideas": ["Show revenue by month.", "Which products perform best?", "Show profit analysis."],
     }
+
+
+def build_kpi_cards(business_metrics: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"label": "Total Sales", "value": business_metrics.get("total_revenue")},
+        {"label": "Total Quantity", "value": business_metrics.get("total_quantity")},
+        {"label": "Total Profit", "value": business_metrics.get("total_profit")},
+        {"label": "Gross Margin", "value": None if business_metrics.get("gross_margin") is None else f"{business_metrics.get('gross_margin')}%"},
+        {"label": "Transactions", "value": business_metrics.get("transaction_count")},
+    ]
 
 
 def _metric_series(df: pd.DataFrame, spec: dict[str, Any] | None, roles: dict[str, str], warnings: list[str], metric_name: str) -> pd.Series | None:
@@ -351,8 +469,27 @@ def _group_by_date(df: pd.DataFrame, date_col: str, values: pd.Series, period: s
 def _group_by_dimension(df: pd.DataFrame, column: str, values: pd.Series, value_name: str) -> list[dict[str, Any]]:
     work = pd.DataFrame({"_dimension": df[column].fillna("Unknown").astype(str), "_value": values})
     grouped = work.groupby("_dimension")["_value"].sum().sort_values(ascending=False).head(20)
-    key = "product" if value_name == "revenue" and "product" in column.lower() else "category" if "category" in column.lower() else "customer" if "customer" in column.lower() else column
+    normalized = column.lower().replace(" ", "_")
+    if any(token in normalized for token in ("product", "item", "sku")):
+        key = "product"
+    elif "category" in normalized:
+        key = "category"
+    elif any(token in normalized for token in ("customer", "client", "buyer")):
+        key = "customer"
+    elif any(token in normalized for token in ("region", "city", "country")):
+        key = "region"
+    elif any(token in normalized for token in ("store", "branch", "shop")):
+        key = "store"
+    else:
+        key = column
     return [{key: str(name), value_name: _money(value)} for name, value in grouped.items() if float(value) != 0]
+
+
+def _count_by_dimension(df: pd.DataFrame, column: str, label_name: str) -> list[dict[str, Any]]:
+    if not column or column not in df.columns:
+        return []
+    grouped = df[column].fillna("Unknown").astype(str).value_counts().head(20)
+    return [{label_name: str(name), "transaction_count": int(count)} for name, count in grouped.items() if int(count) > 0]
 
 
 def _rank_dimension(
@@ -418,6 +555,7 @@ def _product_monthly_trends(
                     "last_period_revenue": _money(last),
                     "absolute_growth": _money(absolute),
                     "pct_growth": None if pct is None else round(float(pct), 2),
+                    "meaningful_periods": bool(first != 0 or last != 0),
                 }
             )
         growth_rows.sort(key=lambda item: float(item["absolute_growth"] or 0), reverse=True)

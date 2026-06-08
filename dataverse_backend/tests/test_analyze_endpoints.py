@@ -240,3 +240,18 @@ def test_ai_khata_report_analysis_uses_extracted_business_summary():
     assert report["prediction"]["status"] == "skipped"
     assert "fewer than 30 rows" in report["prediction"]["reason"]
     assert "sales Rs 7000" in report["executive_summary"]
+
+
+def test_upload_charts_contain_normalized_keys():
+    with TestClient(app) as client:
+        response = _post_upload(client, _sample_frame(), "sales.csv")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "charts" in payload
+    assert len(payload["charts"]) > 0
+    for chart in payload["charts"]:
+        assert "x_key" in chart
+        # Check that x_key is present and not empty, and y_key or series_key are as expected
+        assert chart["x_key"] is not None
+

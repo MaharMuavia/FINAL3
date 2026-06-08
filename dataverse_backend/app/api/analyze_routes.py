@@ -25,7 +25,7 @@ async def analyze_upload(
     task_type: str | None = Form(default=None),
     run_predictions: bool = Form(default=True),
     run_xai: bool = Form(default=True),
-    use_llm: bool = Form(default=False),
+    use_llm: bool = Form(default=True),
 ) -> dict[str, Any]:
     """Uploads a dataset and immediately runs a full analyst report (EDA, modeling, etc.)."""
     contents = await file.read()

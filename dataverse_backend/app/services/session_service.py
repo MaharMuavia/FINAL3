@@ -1,6 +1,7 @@
 """Chat session, dataset, agent-run, and report orchestration."""
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import pandas as pd
 from ..api.upload_parsing import parse_uploaded_dataframe
 from ..core.config import settings
 from .analysis_pipeline import AnalysisPipeline
-from .data_quality import json_safe
+from .data_quality import json_safe, normalize_chart_specs
 from .report_generator import ReportGenerator
 from .semantic_mapper import SemanticMapper
 from .session_store import (
@@ -273,11 +274,17 @@ class SessionService:
             persist_semantic_map_for_session(session_id, facts["semantic_map"])
             await self._update("datasets", dataset_id, {"semantic_map": facts["semantic_map"], "updated_at": utc_now_iso()})
 
-        report_payload = None
-        if generate_report:
-            report_payload = await self.generate_report(session_id, dataset_id, title, facts, xai_output if isinstance(xai_output, dict) else {})
 
-        answer = facts.get("executive_summary") or "Analysis complete."
+        report_payload = None
+        should_generate_report = bool(generate_report)
+        report_facts = _promote_full_report_facts(facts) if should_generate_report else facts
+        if should_generate_report:
+            report_payload = await self.generate_report(session_id, dataset_id, title, report_facts, xai_output if isinstance(xai_output, dict) else {})
+
+        answer = (facts.get("query_answer") or {}).get("answer") or facts.get("executive_summary") or "Analysis complete."
+        response_charts = _response_charts(report_facts, include_report_level=should_generate_report)
+        response_tables = _response_tables(report_facts if should_generate_report else facts)
+        xai_payload = _response_xai(report_facts if should_generate_report else facts, xai_output if isinstance(xai_output, dict) else {})
         assistant_payload = {
             "agents": self._agent_summary(
                 dataset_run,
@@ -285,14 +292,16 @@ class SessionService:
                 dataset_steps=dataset_steps,
                 analysis_steps=analysis_steps,
                 report_steps=report_steps,
-                facts=facts,
+                facts=report_facts,
                 xai_output=xai_output if isinstance(xai_output, dict) else {},
             ),
-            "charts": normalize_charts(facts.get("charts") or []),
-            "tables": build_tables(facts),
+            "kpis": facts.get("kpis") or [],
+            "charts": response_charts,
+            "tables": response_tables,
             "warnings": facts.get("warnings") or [],
             "recommendations": facts.get("recommendations") or [],
             "report": report_payload,
+            "xai": xai_payload,
         }
         await self.add_message(session_id, "assistant", answer, payload=assistant_payload)
         return {
@@ -301,16 +310,23 @@ class SessionService:
             "title": title,
             "agents": assistant_payload["agents"],
             "answer": answer,
-            "tables": assistant_payload["tables"],
-            "charts": assistant_payload["charts"],
+            "kpis": assistant_payload["kpis"],
+            "tables": response_tables,
+            "charts": response_charts,
             "warnings": assistant_payload["warnings"],
             "recommendations": assistant_payload["recommendations"],
             "report": report_payload,
+            "xai": xai_payload,
         }
 
     async def chat_message(self, session_id: str, content: str, dataset_id: str | None = None) -> dict[str, Any]:
-        return await self.analyze(session_id, dataset_id=dataset_id, user_prompt=content, run_xai=True, generate_report=True)
-
+        return await self.analyze(
+            session_id,
+            dataset_id=dataset_id,
+            user_prompt=content,
+            run_xai=True,
+            generate_report=_explicit_report_request(content),
+        )
     async def generate_report(self, session_id: str, dataset_id: str, title: str, facts: dict[str, Any], xai_output: dict[str, Any]) -> dict[str, Any]:
         report_id = str(uuid.uuid4())
         generated = await ReportGenerator().generate(title=title, facts=facts, xai_output=xai_output)
@@ -474,29 +490,97 @@ class SessionService:
 
 
 def normalize_charts(charts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    priority = {"bar": 0, "line": 1, "donut": 2, "pie": 2, "histogram": 5}
-    ordered = sorted(
-        charts,
-        key=lambda chart: (
-            priority.get(str(chart.get("type", "")).lower(), 4),
-            0 if any(token in str(chart.get("title", "")).lower() for token in ["product", "revenue", "category", "growth", "profit"]) else 1,
-        ),
-    )
-    for chart in ordered[:10]:
-        data = chart.get("data") or []
-        x_key = chart.get("x_key") or chart.get("x") or "label"
-        y_key = chart.get("y_key") or chart.get("y")
-        if isinstance(data, list) and data:
-            normalized.append({
-                "type": chart.get("type", "bar"),
-                "title": chart.get("title", "Chart"),
-                "data": data,
-                "x_key": x_key,
-                "y_key": y_key,
-                "series_key": chart.get("series_key"),
-            })
+    normalized, _warnings = normalize_chart_specs(charts, limit=10)
     return normalized
+
+
+def _response_charts(facts: dict[str, Any], *, include_report_level: bool) -> list[dict[str, Any]]:
+    if include_report_level or str((facts.get("query_plan") or {}).get("report_mode")) == "full_analysis_report":
+        return normalize_charts(facts.get("charts") or [])
+    return normalize_charts((facts.get("query_answer") or {}).get("charts") or [])
+
+
+def _response_tables(facts: dict[str, Any]) -> list[dict[str, Any]]:
+    intent = str((facts.get("query_plan") or {}).get("intent") or "")
+    query_tables = (facts.get("query_answer") or {}).get("tables") or []
+    if query_tables and intent in {"total_sales", "top_product", "top_products", "revenue_by_month", "revenue_trend", "category_performance", "region_performance", "profit_summary", "prediction"}:
+        return query_tables
+    return build_tables(facts)
+
+
+def _response_xai(facts: dict[str, Any], xai_output: dict[str, Any]) -> dict[str, Any] | None:
+    query_plan = facts.get("query_plan") or {}
+    prediction = facts.get("prediction") or {}
+    if prediction.get("status") != "complete":
+        return None
+    if query_plan.get("intent") != "prediction" and str(query_plan.get("report_mode")) != "full_analysis_report":
+        return None
+    return xai_output or None
+
+
+def _should_generate_report(facts: dict[str, Any]) -> bool:
+    query_plan = facts.get("query_plan") or {}
+    return str(query_plan.get("report_mode")) == "full_analysis_report" or str(query_plan.get("intent")) == "full_report"
+
+
+def _explicit_report_request(content: str) -> bool:
+    q = content.lower()
+    if any(phrase in q for phrase in ["full report", "generate report", "make report", "make a report", "analysis report", "detailed report", "report of"]):
+        return True
+    return "report" in q and any(word in q for word in ["make", "generate", "create", "build"])
+
+
+def _promote_full_report_facts(facts: dict[str, Any]) -> dict[str, Any]:
+    promoted = dict(facts)
+    query_plan = dict(promoted.get("query_plan") or {})
+    query_plan["report_mode"] = "full_analysis_report"
+    promoted["query_plan"] = query_plan
+    charts = list(promoted.get("charts") or [])
+    if not charts:
+        charts = _merge_chart_sources(
+            (promoted.get("query_answer") or {}).get("charts") or [],
+            (promoted.get("food_analysis") or {}).get("charts") or [],
+            (promoted.get("product_analysis") or {}).get("charts") or [],
+        )
+    promoted["charts"] = charts
+    return promoted
+
+
+def _merge_chart_sources(*chart_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for group in chart_groups:
+        for chart in group:
+            if not isinstance(chart, dict):
+                continue
+            key = (str(chart.get("title") or ""), str(chart.get("type") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(chart)
+    return merged
+
+
+def _dedupe_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[str, ...], str]] = set()
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        rows = table.get("rows")
+        if not rows:
+            continue
+        columns = tuple(str(column) for column in (table.get("columns") or []))
+        key = (
+            str(table.get("title") or ""),
+            columns,
+            json.dumps(rows, sort_keys=True, default=str),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(table)
+    return deduped
 
 
 def build_tables(facts: dict[str, Any]) -> list[dict[str, Any]]:
@@ -513,10 +597,16 @@ def build_tables(facts: dict[str, Any]) -> list[dict[str, Any]]:
         if metrics.get(key) is not None:
             rows.append({"metric": key.replace("_", " ").title(), "value": metrics[key]})
     tables = [{"title": "Analysis Summary", "columns": ["metric", "value"], "rows": rows}]
+    for table in (facts.get("query_answer") or {}).get("tables", []):
+        if isinstance(table, dict) and table.get("rows"):
+            tables.append(table)
+    for table in (facts.get("food_analysis") or {}).get("tables", []):
+        if isinstance(table, dict) and table.get("rows"):
+            tables.append(table)
     for table in (facts.get("product_analysis") or {}).get("tables", []):
         if isinstance(table, dict) and table.get("rows"):
             tables.append(table)
-    return tables[:8]
+    return _dedupe_tables(tables)[:8]
 
 
 session_service = SessionService()

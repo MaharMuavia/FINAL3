@@ -17,3 +17,5 @@ reportlab
 openai
 google-generativeai
 shap
+supabase
+anthropic
