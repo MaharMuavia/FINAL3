@@ -1,0 +1,246 @@
+{
+  "total_sales": {
+    "target": "total_sales",
+    "task_type": "regression",
+    "selected_model": "Ridge",
+    "metrics": {
+      "r2": 1.0,
+      "rmse": 0.010614,
+      "mae": 0.007332
+    },
+    "features": [
+      "region",
+      "city",
+      "category",
+      "subcategory",
+      "unit_price",
+      "quantity",
+      "discount",
+      "profit",
+      "customer_type",
+      "payment_method",
+      "online_order",
+      "stockout_flag",
+      "weekday",
+      "month",
+      "year",
+      "hour",
+      "price_qty",
+      "discount_value",
+      "profit_margin"
+    ],
+    "feature_importance": [
+      {
+        "feature": "price_qty",
+        "importance": 0.875938
+      },
+      {
+        "feature": "discount_value",
+        "importance": 0.123233
+      },
+      {
+        "feature": "profit",
+        "importance": 0.000307
+      },
+      {
+        "feature": "unit_price",
+        "importance": 0.000187
+      },
+      {
+        "feature": "quantity",
+        "importance": 0.000148
+      },
+      {
+        "feature": "profit_margin",
+        "importance": 0.000117
+      },
+      {
+        "feature": "discount",
+        "importance": 5.7e-05
+      },
+      {
+        "feature": "weekday",
+        "importance": 2e-06
+      },
+      {
+        "feature": "customer_type",
+        "importance": 2e-06
+      },
+      {
+        "feature": "year",
+        "importance": 2e-06
+      }
+    ],
+    "model_file": "total_sales_model.pkl"
+  },
+  "profit": {
+    "target": "profit",
+    "task_type": "regression",
+    "selected_model": "Ridge",
+    "metrics": {
+      "r2": 0.753999,
+      "rmse": 5.019354,
+      "mae": 3.190698
+    },
+    "features": [
+      "region",
+      "city",
+      "category",
+      "subcategory",
+      "unit_price",
+      "quantity",
+      "discount",
+      "total_sales",
+      "customer_type",
+      "payment_method",
+      "online_order",
+      "stockout_flag",
+      "weekday",
+      "month",
+      "year",
+      "hour",
+      "price_qty",
+      "discount_value"
+    ],
+    "feature_importance": [
+      {
+        "feature": "total_sales",
+        "importance": 0.471716
+      },
+      {
+        "feature": "price_qty",
+        "importance": 0.420806
+      },
+      {
+        "feature": "discount_value",
+        "importance": 0.072588
+      },
+      {
+        "feature": "unit_price",
+        "importance": 0.008904
+      },
+      {
+        "feature": "weekday",
+        "importance": 0.005824
+      },
+      {
+        "feature": "discount",
+        "importance": 0.004445
+      },
+      {
+        "feature": "year",
+        "importance": 0.00361
+      },
+      {
+        "feature": "payment_method",
+        "importance": 0.003172
+      },
+      {
+        "feature": "online_order",
+        "importance": 0.002641
+      },
+      {
+        "feature": "quantity",
+        "importance": 0.001641
+      }
+    ],
+    "model_file": "profit_model.pkl"
+  },
+  "stockout_flag": {
+    "target": "stockout_flag",
+    "task_type": "classification",
+    "selected_model": "RandomForestClassifier",
+    "metrics": {
+      "accuracy": 0.638286,
+      "f1_weighted": 0.655691,
+      "precision_weighted": 0.67707,
+      "recall_weighted": 0.638286
+    },
+    "features": [
+      "region",
+      "city",
+      "category",
+      "subcategory",
+      "unit_price",
+      "quantity",
+      "discount",
+      "total_sales",
+      "profit",
+      "customer_type",
+      "payment_method",
+      "online_order",
+      "weekday",
+      "month",
+      "year",
+      "hour",
+      "price_qty",
+      "discount_value",
+      "profit_margin"
+    ],
+    "feature_importance": [
+      {
+        "feature": "profit_margin",
+        "importance": 0.114652
+      },
+      {
+        "feature": "total_sales",
+        "importance": 0.113537
+      },
+      {
+        "feature": "unit_price",
+        "importance": 0.108866
+      },
+      {
+        "feature": "profit",
+        "importance": 0.105698
+      },
+      {
+        "feature": "price_qty",
+        "importance": 0.102105
+      },
+      {
+        "feature": "discount_value",
+        "importance": 0.088025
+      },
+      {
+        "feature": "hour",
+        "importance": 0.063389
+      },
+      {
+        "feature": "month",
+        "importance": 0.050701
+      },
+      {
+        "feature": "subcategory",
+        "importance": 0.038465
+      },
+      {
+        "feature": "weekday",
+        "importance": 0.038168
+      }
+    ],
+    "confusion_matrix": [
+      {
+        "actual": "0",
+        "predicted": "0",
+        "count": 5121
+      },
+      {
+        "actual": "0",
+        "predicted": "1",
+        "count": 1866
+      },
+      {
+        "actual": "1",
+        "predicted": "0",
+        "count": 1299
+      },
+      {
+        "actual": "1",
+        "predicted": "1",
+        "count": 464
+      }
+    ],
+    "model_file": "stockout_flag_model.pkl"
+  }
+}
